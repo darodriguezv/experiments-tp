@@ -1,0 +1,24 @@
+# Intel RealSense SDK. Official Windows wheels exist for CPython 3.9-3.14; on
+# anything outside that range pip falls back to building from source and fails
+# without MSVC. Not pinned to a patch version because D400 firmware and SDK are
+# released in step and the newer pair is normally the better one.
+pyrealsense2>=2.55
+
+# Face and iris landmarks. The iris refinement (478 landmarks rather than 468)
+# is not optional here - without it there is no pupil observation and no gaze
+# estimate is possible at all.
+mediapipe>=0.10.9
+
+# Bounded least squares for the calibration fit. numpy alone cannot do the
+# box-constrained solve, and the bounds are what keep the fitted eye parameters
+# anatomically meaningful instead of merely convenient.
+scipy>=1.11
+
+opencv-python>=4.8
+numpy>=1.24
+pillow>=10.0
+screeninfo>=0.8
+
+# Note on numpy: unlike the EyeTrax harness, nothing here pins numpy<2. That
+# pin was eyetrax's, and dropping the dependency drops the pin - which is why
+# this project can run on a current Python instead of being stuck on 3.12.

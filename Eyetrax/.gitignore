@@ -1,0 +1,6 @@
+.conda/
+.venv/
+__pycache__/
+*.pyc
+models/*.pkl
+logs/*.csv

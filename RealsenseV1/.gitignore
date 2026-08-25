@@ -1,0 +1,7 @@
+.conda/
+__pycache__/
+*.pyc
+logs/*.csv
+recordings/*.bag
+recordings/*.db3
+models/*.json

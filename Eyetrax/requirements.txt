@@ -1,0 +1,2 @@
+# EyeTrax pins numpy<2, and numpy 1.x has no cp313 wheels -> use Python 3.10-3.12.
+eyetrax==0.4.0
