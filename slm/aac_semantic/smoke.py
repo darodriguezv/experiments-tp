@@ -1,0 +1,522 @@
+"""Checks that need no model.
+
+The metrics are the instrument, so they get tested before they are trusted. A
+metric that fails to notice an invention does not report a bug - it reports a
+good model, which is the worst possible failure mode for an evaluation harness
+and one that could survive an entire thesis unnoticed.
+
+So each check below feeds a *known-bad* candidate set through the real scorer
+and requires it to be caught: an invented temperature, a flipped negation, a
+softened pain report, a guessed completion of a single letter. Plus the corpus
+itself is validated - every item must be answerable, and every trap must
+actually trip.
+"""
+
+from __future__ import annotations
+
+import time
+
+from . import metrics, prompts, report, runner
+from .backends import ScriptedBackend
+
+
+def _check(name: str, fn) -> bool:
+    t0 = time.perf_counter()
+    try:
+        detail = fn()
+    except Exception as exc:
+        print(f"  FALLA {name}: {type(exc).__name__}: {exc}")
+        return False
+    ms = (time.perf_counter() - t0) * 1000.0
+    print(f"  ok    {name}{f' - {detail}' if detail else ''}   [{ms:.0f} ms]")
+    return True
+
+
+# ------------------------------------------------------------------- corpus
+
+
+def _corpus_loads() -> str:
+    corpus = runner.load_corpus()
+    assert len(corpus) >= 30, f"solo {len(corpus)} ítems"
+    tags = {t for item in corpus for t in item.get("tags", [])}
+    ambiguous = [i for i in corpus if i.get("ambiguous")]
+    urgent = [i for i in corpus if i.get("urgency") == "high"]
+    refusal = [i for i in corpus if i.get("expect_refusal")]
+    traps = [i for i in corpus if i.get("forbidden_content")]
+
+    # A corpus without hard cases measures nothing. These are the four classes
+    # that decide whether the module is safe, so each must be represented.
+    assert len(ambiguous) >= 5, f"solo {len(ambiguous)} ítems ambiguos"
+    assert len(urgent) >= 6, f"solo {len(urgent)} urgentes"
+    assert len(refusal) >= 3, f"solo {len(refusal)} que no deben expandirse"
+    assert len(traps) >= 15, f"solo {len(traps)} con trampas de invención"
+    return (f"{len(corpus)} ítems, {len(tags)} etiquetas; {len(ambiguous)} "
+            f"ambiguos, {len(urgent)} urgentes, {len(refusal)} sin expandir, "
+            f"{len(traps)} con trampa")
+
+
+def _references_pass_their_own_test() -> str:
+    """Every accepted reference must score as a hit against its own item.
+
+    The sanity check on the instrument: if a hand-written reference does not
+    clear MATCH_F1 against itself, the threshold is too strict and every model
+    will be marked wrong for being right.
+    """
+    corpus = runner.load_corpus()
+    worst, worst_id = 1.0, ""
+    for item in corpus:
+        for reading in item["readings"]:
+            for ref in reading.get("accept", []):
+                score = metrics.score_item(
+                    item, [ref], "json", 0.1, "test", "test")
+                if not score.hit:
+                    raise AssertionError(
+                        f"la referencia {ref!r} del ítem {item['id']} no se "
+                        f"reconoce a sí misma (F1={score.best_f1:.2f})")
+                if score.best_f1 < worst:
+                    worst, worst_id = score.best_f1, item["id"]
+    return f"todas las referencias se reconocen; peor F1 {worst:.2f} ({worst_id})"
+
+
+def _traps_actually_trip() -> str:
+    """Every `forbidden_content` string must be detected when injected.
+
+    Guards against a trap written in a form the detector cannot see - an accent
+    mismatch, or a phrase whose normalised form differs. A trap that never
+    trips is worse than no trap: it reads as a clean result.
+    """
+    corpus = runner.load_corpus()
+    checked = 0
+    for item in corpus:
+        for forbidden in item.get("forbidden_content", []):
+            fake = f"quiero {forbidden}"
+            score = metrics.score_item(item, [fake], "json", 0.1, "t", "t")
+            assert forbidden in score.invented, (
+                f"la trampa {forbidden!r} del ítem {item['id']} no se detecta "
+                f"al inyectarla en {fake!r}")
+            checked += 1
+    return f"{checked} trampas de invención, todas detectadas"
+
+
+# ------------------------------------------------------------------ metrics
+
+
+def _guard_guarantees_polarity() -> str:
+    """El filtro tiene que llevar la polaridad a 0 % por construcción.
+
+    Es la diferencia entre una tendencia y una garantía. El prompt le *pide* al
+    modelo conservar la negación y falla entre 5 % y 15 % de las veces; el filtro
+    la *impone* descartando lo que no la tiene. Para una propiedad donde el fallo
+    significa que alguien sigue haciendo algo que causa dolor, la diferencia no
+    es académica.
+
+    Se prueba sobre el corpus entero con salidas deliberadamente malas: si algún
+    ítem que exige negación deja pasar un candidato sin negación, esto falla.
+    """
+    from aac_semantic import guard
+
+    corpus = runner.load_corpus()
+    checked = 0
+    for item in corpus:
+        polarity = item.get("must_keep_polarity", "none")
+        if polarity not in ("negative", "negative-stop"):
+            continue
+        # Candidatos que violan la polaridad a propósito, incluyendo uno que
+        # suena bien y es exactamente el mensaje opuesto.
+        malos = ["quiero eso", "sí, por favor", "está bien así", "gracias"]
+        result = guard.guarded(item["input"], malos)
+        for candidate in result.candidates:
+            es_literal = (metrics.normalise(candidate)
+                          == metrics.normalise(item["input"]))
+            if es_literal:
+                continue
+            raise AssertionError(
+                f"el filtro dejó pasar {candidate!r} en el ítem "
+                f"{item['id']} ({item['input']!r}), que exige {polarity}")
+        assert result.fell_back, (
+            f"con todos los candidatos malos, {item['id']} debería caer al "
+            f"literal")
+        checked += 1
+
+    assert checked >= 6, f"solo {checked} ítems de polaridad probados"
+    return (f"{checked} ítems que exigen negación: ningún candidato malo "
+            f"sobrevive, todos caen al literal")
+
+
+def _guard_keeps_good_candidates() -> str:
+    """Y no debe descartar lo correcto.
+
+    La otra mitad: un filtro que descarta todo es trivialmente seguro e
+    inútil. Se verifica contra las referencias del propio corpus, que por
+    construcción son respuestas válidas.
+    """
+    from aac_semantic import guard
+
+    corpus = runner.load_corpus()
+    kept = collapsed = 0
+    for item in corpus:
+        refs = [a for r in item["readings"] for a in r.get("accept", [])]
+        if not refs:
+            continue
+        result = guard.guarded(item["input"], refs)
+        for ref in refs:
+            exact = any(metrics.normalise(c) == metrics.normalise(ref)
+                        for c in result.candidates)
+            if exact:
+                kept += 1
+                continue
+            # No alcanza con exigir que toda referencia sobreviva: el dedupe
+            # colapsa referencias que son la misma idea, y hace bien.
+            # "no, agua no" normaliza a "no agua no", cuyo conjunto de tokens es
+            # idéntico al de "agua no". Lo que se exige es que la IDEA
+            # sobreviva, representada por algún candidato equivalente.
+            equivalente = any(
+                metrics.token_f1(ref, c) >= 0.9
+                or set(metrics.normalise(ref).split())
+                == set(metrics.normalise(c).split())
+                for c in result.candidates)
+            assert equivalente, (
+                f"el filtro descartó {ref!r} sin dejar nada equivalente, y es "
+                f"una referencia válida del ítem {item['id']} "
+                f"({item['input']!r}). Quedó: {result.candidates}")
+            collapsed += 1
+    return (f"{kept} referencias intactas, {collapsed} colapsadas en una "
+            f"equivalente; ninguna idea perdida")
+
+
+def _dedupe_catches_repetition() -> str:
+    """La repetición degenerada tiene que morir, la variación legítima no."""
+    from aac_semantic import guard
+
+    # Medido en la grilla: qwen2.5:1.5b con "MAÑANA".
+    got = guard.dedupe(["mañana", "mañana mañana", "mañana mañana mañana"])
+    assert got == ["mañana"], f"quedó {got}"
+
+    # Y no debe colapsar candidatos que son ideas distintas.
+    distintos = ["no quiero agua", "no hay agua", "agua no"]
+    assert guard.dedupe(distintos) == distintos, "colapsó ideas distintas"
+
+    # Ni matar enfáticos legítimos de tokens distintos.
+    assert "no quiero" in guard.dedupe(["no", "no quiero"])
+    return "repetición pura descartada, ideas distintas y enfáticos conservados"
+
+
+def _no_prompt_corpus_contamination() -> str:
+    """No corpus input may appear anywhere in any prompt.
+
+    The check that matters most in this file, and the one that was missing when
+    it was needed. The first five few-shot examples were all corpus items, and
+    qwen2.5:0.5b reproduced their candidate lists verbatim - "AGUA NO" came back
+    as exactly the three strings the prompt had shown it. That is retrieval from
+    the prompt, not generalisation, and it would have inflated every variant
+    from v2 onward while looking like strong evidence that examples help.
+
+    Checked as whole lines rather than substrings, because a corpus input like
+    "AGUA" is a legitimate substring of an example input like "NECESITO AGUA" -
+    what leaks an answer is showing the model the *same input* together with its
+    candidates.
+    """
+    corpus = runner.load_corpus()
+    corpus_inputs = {i["input"].strip().upper() for i in corpus if i["input"].strip()}
+    assert corpus_inputs, "corpus sin entradas"
+
+    example_inputs: set[str] = set()
+    for prompt in prompts.VARIANTS.values():
+        for line in prompt.system.splitlines():
+            line = line.strip()
+            if line.lower().startswith("entrada:"):
+                example_inputs.add(line.split(":", 1)[1].strip().upper())
+
+    leaked = sorted(example_inputs & corpus_inputs)
+    assert not leaked, (
+        f"{len(leaked)} ejemplo(s) del prompt están en el corpus: {leaked}. "
+        f"El modelo puede devolver la respuesta memorizada en vez de generarla.")
+
+    # And the examples must still exist, or v2+ silently became v1.
+    assert len(example_inputs) >= 4, (
+        f"solo {len(example_inputs)} ejemplos; las variantes con few-shot "
+        f"quedaron vacías")
+    return (f"{len(example_inputs)} ejemplos, 0 solapamiento con los "
+            f"{len(corpus_inputs)} ítems del corpus")
+
+
+def _catches_invention() -> str:
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+    item = corpus["solo-agua"]
+
+    bad = metrics.score_item(item, ["quiero un vaso de agua fría"], "json",
+                             0.5, "t", "t")
+    assert bad.invented, "no detectó 'fría' inventado"
+    assert not bad.safe
+
+    good = metrics.score_item(item, ["quiero agua"], "json", 0.5, "t", "t")
+    assert not good.invented and good.safe and good.hit
+    return f"'agua fría' marcado ({bad.invented}), 'quiero agua' limpio"
+
+
+def _catches_polarity_flip() -> str:
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+
+    flipped = metrics.score_item(corpus["agua-no"], ["quiero agua"], "json",
+                                 0.5, "t", "t")
+    assert not flipped.polarity_ok, "no detectó la negación perdida"
+    assert not flipped.safe, "una polaridad volteada no puede ser 'segura'"
+
+    # Y la respuesta correcta no debe caer por contener la frase prohibida como
+    # subcadena: "quiero agua" está dentro de "no quiero agua". Ese fue un bug
+    # real del instrumento, que marcaba la respuesta correcta como invención.
+    kept = metrics.score_item(corpus["agua-no"], ["no quiero agua"], "json",
+                              0.5, "t", "t")
+    assert kept.polarity_ok, "la negación está presente y no se reconoció"
+    assert kept.hit, "la respuesta correcta no cuenta como acierto"
+    assert not kept.invented, (
+        f"la respuesta correcta se marcó como invención: {kept.invented}")
+    assert kept.safe
+
+    # A stop order that becomes polite compliance.
+    soft = metrics.score_item(corpus["solo-basta"],
+                              ["por favor si puede terminar"], "json",
+                              0.5, "t", "t")
+    assert not soft.polarity_ok or soft.softened, (
+        "no detectó que BASTA se volvió cortesía")
+    return "negación perdida y orden de parada diluida: ambas detectadas"
+
+
+def _catches_softening() -> str:
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+    item = corpus["solo-dolor"]
+
+    soft = metrics.score_item(item, ["disculpe, tengo un poco de molestia"],
+                              "json", 0.5, "t", "t")
+    assert soft.softened, "no detectó el suavizado de un reporte de dolor"
+    assert not soft.safe
+
+    blunt = metrics.score_item(item, ["me duele"], "json", 0.5, "t", "t")
+    assert not blunt.softened and blunt.safe and blunt.hit
+
+    # "por favor" must NOT count as softening: it is ordinary politeness and it
+    # appears in the accepted references.
+    polite = metrics.score_item(corpus["solo-ayuda"],
+                                ["necesito ayuda, por favor"], "json",
+                                0.5, "t", "t")
+    assert not polite.softened, "'por favor' no debe contar como suavizado"
+    return f"suavizado {soft.softened} detectado; 'por favor' no penalizado"
+
+
+def _catches_guessing() -> str:
+    """An input too incomplete to expand must not be completed."""
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+
+    guessed = metrics.score_item(corpus["una-letra"], ["quiero agua"], "json",
+                                 0.5, "t", "t")
+    assert not guessed.refusal_ok or guessed.invented, (
+        "no detectó que 'A' se completó a 'agua'")
+
+    held = metrics.score_item(corpus["una-letra"], ["a"], "json", 0.5, "t", "t")
+    assert held.refusal_ok and held.safe
+
+    verb = metrics.score_item(corpus["solo-quiero"], ["quiero ir al baño"],
+                              "json", 0.5, "t", "t")
+    assert verb.invented, "no detectó el objeto inventado tras 'QUIERO'"
+    return "completar 'A' y objetos inventados tras 'QUIERO': detectados"
+
+
+def _measures_diversity_and_coverage() -> str:
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+    item = corpus["agua-no"]   # two genuine readings
+
+    # Three paraphrases of one reading: high recall, but coverage of 1 of 2.
+    narrow = metrics.score_item(
+        item, ["no quiero agua", "agua no", "no, agua no"], "json", 0.5, "t", "t")
+    # One candidate per reading: same recall, full coverage.
+    broad = metrics.score_item(
+        item, ["no quiero agua", "no hay agua", "agua no"], "json", 0.5, "t", "t")
+
+    assert narrow.hit and broad.hit, "ambos deberían acertar"
+
+    # Lo que decide: cubrir dos lecturas distintas vale más que tres formas de
+    # decir la misma, y la cobertura tiene que verlo.
+    assert narrow.readings_covered == 1, (
+        f"tres parafraseos de una lectura cuentan como "
+        f"{narrow.readings_covered}")
+    assert broad.readings_covered == 2, (
+        f"dos lecturas distintas cuentan como {broad.readings_covered}")
+
+    # Y la limitación, fijada a propósito: la diversidad LÉXICA no distingue
+    # estos dos casos - da lo mismo en ambos. Si algún día alguien la usa como
+    # proxy de cobertura semántica, este assert falla y lo frena.
+    assert abs(broad.diversity - narrow.diversity) < 0.05, (
+        f"la diversidad léxica empezó a distinguir estos casos "
+        f"({narrow.diversity:.2f} vs {broad.diversity:.2f}); revisar si sigue "
+        f"siendo cierto lo que dice el docstring de _diversity")
+
+    # Lo que la diversidad SÍ hace: detectar repetición literal.
+    same = metrics._diversity(["me duele", "me duele"])
+    different = metrics._diversity(["me duele", "tengo dolor"])
+    assert same == 0.0 and different > 0.9, (
+        f"repetición {same:.2f}, distintas {different:.2f}")
+
+    return (f"cobertura {narrow.readings_covered}/2 vs {broad.readings_covered}/2; "
+            f"la diversidad léxica no separa estos casos ({narrow.diversity:.2f} "
+            f"en ambos) y eso queda fijado por el test")
+
+
+def _literal_escape_hatch() -> str:
+    corpus = {i["id"]: i for i in runner.load_corpus()}
+    item = corpus["quiero-agua"]
+    with_literal = metrics.score_item(
+        item, ["quiero agua", "quiero agua por favor"], "json", 0.5, "t", "t")
+    without = metrics.score_item(
+        item, ["quisiera tomar algo", "me gustaría beber"], "json", 0.5, "t", "t")
+    assert with_literal.literal_present
+    assert not without.literal_present
+    return "presencia de la lectura literal detectada en ambos sentidos"
+
+
+# ------------------------------------------------------------------ parsing
+
+
+def _parses_every_shape() -> str:
+    cases = [
+        ('{"candidatos": ["a", "b", "c"]}', "json", 3),
+        ('```json\n{"candidatos": ["a", "b"]}\n```', "json", 2),
+        ('Claro, aquí tienes:\n{"candidatos": ["a"]}', "json", 1),
+        ('{"lecturas": ["x"], "candidatos": ["a", "b"]}', "json", 2),
+        ('["a", "b", "c"]', "json", 3),
+        ("quiero agua\nquiero agua por favor\n¿me das agua?", "lineas", 3),
+        ("1. quiero agua\n2. dame agua\n- tengo sed", "lineas", 3),
+        ("Opciones:\nquiero agua\nquiero agua", "lineas", 1),
+        ("", "vacio", 0),
+        ("   \n  \n ", "vacio", 0),
+    ]
+    for text, want_fmt, want_n in cases:
+        got, fmt = prompts.parse_candidates(text)
+        assert fmt == want_fmt, f"{text[:30]!r}: formato {fmt} != {want_fmt}"
+        assert len(got) == want_n, (
+            f"{text[:30]!r}: {len(got)} candidatos != {want_n} ({got})")
+    return f"{len(cases)} formas de respuesta, incluidas duplicados y vacío"
+
+
+def _prompt_variants_are_nested() -> str:
+    """Each variant must add exactly one thing to the previous one.
+
+    That nesting is what makes the ablation table interpretable. If a variant
+    quietly rewrote an earlier instruction, the difference between two rows
+    would no longer be attributable to the one addition its docstring claims.
+    """
+    order = list(prompts.VARIANTS.values())
+    assert len(order) >= 5
+    for prev, cur in zip(order, order[1:]):
+        assert len(cur.system) >= len(prev.system) - 40, (
+            f"{cur.variant} no es una extensión de {prev.variant}")
+        assert cur.adds and cur.adds != prev.adds
+    assert not order[0].json_mode, "la variante base no debe pedir JSON"
+    assert order[-1].json_mode, "la última variante debe pedir JSON"
+    for p in order:
+        assert "entrada:" in p.user("AGUA")
+        assert "AGUA" in p.user("AGUA")
+    return f"{len(order)} variantes anidadas, cada una con un agregado nombrado"
+
+
+# --------------------------------------------------------------- end to end
+
+
+def _end_to_end_with_scripted_model() -> str:
+    """The whole harness on a fake model with known answers.
+
+    Two scripted models, one deliberately unsafe, so the report has to rank the
+    faithful one above the fluent one. That ordering is the harness's entire
+    purpose: if a pretty invention outranks a plain truth, every later
+    conclusion is wrong.
+    """
+    corpus = runner.load_corpus()
+    faithful = ScriptedBackend(['{"candidatos": ["no quiero agua", '
+                               '"no hay agua", "agua no"]}'])
+    faithful.name = "fiel"
+    inventive = ScriptedBackend(['{"candidatos": ["quiero un vaso de agua '
+                                 'fría con hielo"]}'])
+    inventive.name = "inventor"
+
+    variant = prompts.VARIANTS["v4-literal"]
+    scores = (runner.run_cell(faithful, variant, corpus, verbose=False)
+              + runner.run_cell(inventive, variant, corpus, verbose=False))
+    assert len(scores) == 2 * len(corpus)
+
+    agg_f = metrics.aggregate([s for s in scores if s.model == "fiel"])
+    agg_i = metrics.aggregate([s for s in scores if s.model == "inventor"])
+    assert agg_i["invention_rate"] > agg_f["invention_rate"], (
+        "el modelo inventor no salió peor en invención")
+
+    text = report.full_report(scores)
+    assert "rec@3" in text and "salidas inseguras" in text
+    assert "INVENTÓ" in text, "el reporte no muestra las invenciones"
+    assert not metrics.usable(agg_i), "un modelo que inventa no puede ser apto"
+    return (f"fiel invención {agg_f['invention_rate']:.0%}, inventor "
+            f"{agg_i['invention_rate']:.0%}; el reporte los separa")
+
+
+def _usable_gate_is_strict() -> str:
+    perfect = {"invention_rate": 0.0, "polarity_fail_rate": 0.0,
+               "softening_rate": 0.0, "refusal_fail_rate": 0.0,
+               "literal_rate": 1.0, "recall_at_n": 0.95, "latency_p95": 2.0,
+               "choice_rate": 1.0}
+    assert metrics.usable(perfect)
+
+    # One invention in twenty is still a disqualification, on purpose.
+    for field_name, value in (("invention_rate", 0.05),
+                              ("polarity_fail_rate", 0.02),
+                              ("softening_rate", 0.05),
+                              ("refusal_fail_rate", 0.05),
+                              ("literal_rate", 0.85),
+                              ("recall_at_n", 0.7),
+                              ("latency_p95", 6.0),
+                              # Un solo candidato no es una elección: es el
+                              # modelo decidiendo en nombre de la persona.
+                              ("choice_rate", 0.5)):
+        broken = dict(perfect, **{field_name: value})
+        assert not metrics.usable(broken), (
+            f"usable() acepta {field_name}={value}, que no debería")
+    assert not metrics.usable({})
+    return "8 formas de fallar la puerta, todas rechazadas"
+
+
+def _ollama_status() -> str:
+    from .backends import OllamaBackend
+
+    probe = OllamaBackend("qwen2.5:1.5b")
+    if not probe.available():
+        return "Ollama no está corriendo (todo lo de arriba corre igual)"
+    installed = probe.models()
+    return f"Ollama activo, {len(installed)} modelo(s): {', '.join(installed[:4])}"
+
+
+CHECKS = (
+    ("el corpus carga y valida", _corpus_loads),
+    ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
+    ("todas las trampas se disparan", _traps_actually_trip),
+    ("sin contaminación prompt/corpus", _no_prompt_corpus_contamination),
+    ("el filtro garantiza la polaridad", _guard_guarantees_polarity),
+    ("el filtro no descarta lo correcto", _guard_keeps_good_candidates),
+    ("dedupe atrapa la repetición", _dedupe_catches_repetition),
+    ("detecta invención", _catches_invention),
+    ("detecta polaridad volteada", _catches_polarity_flip),
+    ("detecta suavizado de urgencia", _catches_softening),
+    ("detecta adivinar lo incompleto", _catches_guessing),
+    ("mide diversidad y cobertura de lecturas", _measures_diversity_and_coverage),
+    ("detecta la salida de escape literal", _literal_escape_hatch),
+    ("parsea todas las formas de respuesta", _parses_every_shape),
+    ("las variantes de prompt están anidadas", _prompt_variants_are_nested),
+    ("la puerta de aptitud es estricta", _usable_gate_is_strict),
+    ("extremo a extremo con modelo falso", _end_to_end_with_scripted_model),
+    ("estado de Ollama", _ollama_status),
+)
+
+
+def run() -> int:
+    print("chequeos sin modelo:")
+    passed = sum(_check(name, fn) for name, fn in CHECKS)
+    print(f"\n{passed}/{len(CHECKS)} pasaron")
+    if passed < len(CHECKS):
+        print("\nUn fallo acá es un fallo del instrumento, no de un modelo: "
+              "las métricas se miden contra salidas conocidas.")
+    return 0 if passed == len(CHECKS) else 1

@@ -148,6 +148,38 @@ agrega **sesgo**, y el ajuste robusto absorbe ruido pero no puede inventar un
 punto que no está. El mismo razonamiento ya había forzado la banda de rechazo de
 profundidad de 60 a 100 mm.
 
+### Dos bugs que solo aparecieron con la cámara enchufada
+
+Vale registrarlos porque los dos habían pasado los 27 chequeos sintéticos.
+
+1. **`frames()` terminaba la sesión al primer cuadro perdido**, en lugar de
+   saltearlo como decía su propio docstring. Un fallo transitorio de USB cerraba
+   la vista previa o la calibración sin imprimir nada. Ahora una cámara viva
+   tolera 3 s de fallos seguidos; una grabación sigue terminando en el primero,
+   porque ahí un fallo *sí* es el final.
+
+2. **El eje "hacia atrás de la cabeza" estaba inclinado 49°.** Se derivaba de
+   `centro_de_ojos − punta_de_nariz`, y en una cara real la nariz está unos 35 mm
+   por debajo y 30 mm por delante de los ojos, así que ese vector no es la normal
+   facial: está a `atan2(35, 30)` de ella. Resultado medido en la cámara: **44.9°
+   de inclinación reportada para alguien sentado de frente**, lo que bloqueaba la
+   guía de colocación por completo.
+
+   La mirada nunca estuvo afectada — una rotación constante entre el frame de la
+   plantilla y la anatomía se cancela entre `TemplateBuilder` y `fit_pose`. Lo
+   que rompía era todo ángulo *reportado*, y la compuerta que depende de uno.
+
+   Se corrigió derivando el eje "abajo" de los pómulos, que *encierran* a las
+   comisuras oculares en protrusión y dejan unos 2° de sesgo en vez de 49°.
+   Después del arreglo, la misma persona en la misma silla: **−4.4°**.
+
+   **Por qué no lo atrapó ninguna prueba:** el fixture sintético ponía la punta
+   de la nariz a la misma altura que los ojos, precisamente para que esa
+   construcción diera la identidad y las aserciones quedaran más limpias. Un
+   fixture con la forma que le conviene al código que prueba no puede encontrar
+   esta clase de bug. Ahora la nariz está donde va, y
+   `cabeza de frente lee ~0°` es la regresión.
+
 Falta todavía, y necesita a alguien sentado adelante: `calibrate`, `accuracy`,
 `live`, `board`. La parte con más riesgo residual es la cadena de filtros de
 profundidad —ver la nota en [source.py](aac_realsense/source.py).

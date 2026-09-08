@@ -11,6 +11,7 @@
     python main.py board       # tablero CAA con selección por permanencia
     python main.py pipeline    # todo junto: calibrar, medir y abrir el tablero
     python main.py record      # graba una sesión a .bag para analizarla después
+    python main.py refit       # rehace el ajuste desde las muestras, sin cámara
 """
 
 from __future__ import annotations
@@ -249,6 +250,28 @@ def main(argv: list[str] | None = None) -> int:
     p_pipe.add_argument("--no-speech", action="store_true")
     p_pipe.add_argument("--no-log", action="store_true")
 
+    p_refit = sub.add_parser(
+        "refit",
+        help="rehace el ajuste desde las muestras guardadas, sin cámara ni "
+             "persona: para probar otra geometría de montaje sin repetir la "
+             "calibración")
+    _add_common(p_refit)
+    p_refit.add_argument(
+        "--mount-shift", type=float, default=None,
+        help="cuánto se le permite mover al plano de la pantalla, en mm por eje "
+             "(por defecto 30). Subilo a 80 para preguntarle al ajuste DÓNDE "
+             "está realmente la cámara")
+    p_refit.add_argument(
+        "--mount-rotate", type=float, default=None,
+        help="grados por eje que se le permite girar (por defecto 5)")
+    p_refit.add_argument("--residual-order", type=int, default=None,
+                         help="orden del polinomio de corrección (0, 1, 2 o 3)")
+    p_refit.add_argument("--no-residual", action="store_true",
+                         help="solo geometría, para ver cuánto aporta de verdad")
+    p_refit.add_argument("--no-refine-mount", action="store_true")
+    p_refit.add_argument("--out", default=None,
+                         help="guardar en otra ruta y no sobreescribir el modelo")
+
     p_rec = sub.add_parser(
         "record",
         help="graba color+profundidad a .bag para reanalizar sin la persona")
@@ -295,6 +318,19 @@ def main(argv: list[str] | None = None) -> int:
         from aac_realsense import preview
 
         return preview.record(settings, args.seconds)
+
+    if args.command == "refit":
+        from aac_realsense import refit
+
+        path = refit.run(
+            settings,
+            mount_shift_mm=args.mount_shift,
+            mount_rotate_deg=args.mount_rotate,
+            residual_order=args.residual_order,
+            no_residual=args.no_residual,
+            no_refine_mount=args.no_refine_mount,
+            out_path=Path(args.out) if args.out else None)
+        return 0 if path else 1
 
     if args.command == "calibrate":
         from aac_realsense import calibrate

@@ -191,6 +191,8 @@ def fit(samples: list[Sample], init_eyes: eyemodel.EyeGeometry,
         refine_mount: bool = True,
         residual_correction: bool = True,
         residual_order: int = 2,
+        mount_shift_m: float = MOUNT_SHIFT_M,
+        mount_rotate_deg: float = MOUNT_ROTATE_DEG,
         verbose: bool = True) -> tuple[eyemodel.EyeGeometry,
                                        geometry.ScreenPlane,
                                        estimator.ResidualCorrector,
@@ -215,8 +217,8 @@ def fit(samples: list[Sample], init_eyes: eyemodel.EyeGeometry,
 
     if refine_mount:
         x0 = np.concatenate([x0, np.zeros(6)])
-        mount_lo = np.array([-MOUNT_SHIFT_M] * 3
-                            + [-math.radians(MOUNT_ROTATE_DEG)] * 3)
+        mount_lo = np.array([-mount_shift_m] * 3
+                            + [-math.radians(mount_rotate_deg)] * 3)
         lo = np.concatenate([lo, mount_lo])
         hi = np.concatenate([hi, -mount_lo])
 

@@ -23,6 +23,7 @@ posture should not degrade it.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,7 @@ import numpy as np
 from . import (estimator, eyemodel, face3d, fitting, geometry, landmarks,
                positioning, source, ui)
 from .config import Settings, ensure_dirs
-from .frames import Frame
+from .frames import Frame, Intrinsics
 from .tracker import GazeTracker
 
 WINDOW = "CAA - calibración"
@@ -59,6 +60,82 @@ class RawSample:
     valid: np.ndarray
     iris_rays: dict[str, np.ndarray]
     iris_radius_px: dict[str, float]
+
+
+SAMPLES_SUFFIX = ".samples.npz"
+"""Where the raw collection is kept, next to the model.
+
+Saving it is not an optimisation, it is the difference between a hypothesis
+about the mount costing a keystroke and costing another session with the person
+in the chair. The first real calibration on hardware ended with every mount
+parameter pinned at its bound; the obvious next step was to refit with wider
+bounds, and that was impossible because the samples had been discarded after
+fitting. They are a few hundred kilobytes.
+"""
+
+
+def samples_path(model_path: Path) -> Path:
+    return Path(model_path).with_suffix(SAMPLES_SUFFIX)
+
+
+def save_samples(raw: list["RawSample"], intrin: Intrinsics, path: Path) -> Path:
+    """Persist the collection so the fit can be redone offline, any number of
+    times, against different bounds or a rebuilt template."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keys = list(landmarks.EYE_KEYS)
+    np.savez_compressed(
+        path,
+        rigid_indices=np.asarray(landmarks.RIGID_INDICES, dtype=np.int32),
+        target_px=np.stack([s.target_px for s in raw]),
+        target_index=np.asarray([s.target_index for s in raw], dtype=np.int32),
+        pass_index=np.asarray([s.pass_index for s in raw], dtype=np.int32),
+        points_cam=np.stack([s.points_cam for s in raw]).astype(np.float32),
+        valid=np.stack([s.valid for s in raw]),
+        eye_keys=np.asarray(keys),
+        # A ray of NaN marks "this eye was not observed in this frame", which
+        # keeps the arrays rectangular without inventing an observation.
+        iris_rays=np.stack([
+            np.stack([s.iris_rays.get(k, np.full(3, np.nan)) for k in keys])
+            for s in raw]).astype(np.float32),
+        iris_radius_px=np.asarray(
+            [[s.iris_radius_px.get(k, np.nan) for k in keys] for s in raw],
+            dtype=np.float32),
+        intrinsics=np.asarray(json.dumps(intrin.as_dict())),
+    )
+    return path
+
+
+def load_samples(path: Path):
+    """Inverse of `save_samples`. Returns (raw samples, intrinsics)."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no hay muestras de calibración en {path}. Se guardan desde la "
+            f"versión que agregó `refit`; una calibración anterior no las "
+            f"tiene y hay que repetirla una vez."
+        )
+    d = np.load(path, allow_pickle=False)
+    keys = [str(k) for k in d["eye_keys"]]
+    intrin = Intrinsics.from_dict(json.loads(str(d["intrinsics"])))
+
+    raw: list[RawSample] = []
+    for i in range(len(d["target_index"])):
+        rays, radii = {}, {}
+        for j, key in enumerate(keys):
+            ray = d["iris_rays"][i, j].astype(np.float64)
+            if np.all(np.isfinite(ray)):
+                rays[key] = ray
+                radii[key] = float(d["iris_radius_px"][i, j])
+        raw.append(RawSample(
+            target_px=d["target_px"][i].astype(np.float64),
+            target_index=int(d["target_index"][i]),
+            pass_index=int(d["pass_index"][i]),
+            points_cam=d["points_cam"][i].astype(np.float64),
+            valid=d["valid"][i].astype(bool),
+            iris_rays=rays, iris_radius_px=radii,
+        ))
+    return raw, intrin
 
 
 def grid_targets(rows: int, cols: int, width: int, height: int,
@@ -319,7 +396,11 @@ def run(settings: Settings, method: str = "9point", passes: int = 2,
             model.meta["hybrid"] = _fit_hybrid(samples, template, eyes)
 
         path = model.save(settings.model_path)
+        sp = save_samples(raw, intrin, samples_path(settings.model_path))
         print(f"\n[calibración] guardado -> {path}")
+        print(f"[calibración] muestras crudas -> {sp} "
+              f"({sp.stat().st_size / 1e3:.0f} kB). Con esto se "
+              f"reajusta sin volver a calibrar: `main.py refit`.")
         _advise(report, tracker)
         return path
 

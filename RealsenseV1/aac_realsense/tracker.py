@@ -56,6 +56,15 @@ class GazeSample:
     the pupil centre is quantised by it - so it belongs in the logs next to the
     error it explains."""
 
+    rigid_coverage: float = 0.0
+    """Fraction of the rigid landmarks that carried usable depth this frame.
+
+    The honest "does the geometric model have data" signal. Not to be confused
+    with the whole-frame depth fill rate, which for a face against a distant
+    background sits around a quarter no matter how healthy the face is - an
+    earlier version of `accuracy` reported that number under this name and
+    produced a confident, entirely spurious warning about missing depth."""
+
     head_yaw: float = 0.0
     head_pitch: float = 0.0
     head_roll: float = 0.0
@@ -242,6 +251,8 @@ class GazeTracker:
             confidence=est.confidence,
             distance_cm=est.head.distance_m * 100.0,
             iris_px=iris_px,
+            rigid_coverage=(est.head.points_valid
+                            / max(len(self.model.template.indices), 1)),
             head_yaw=yaw, head_pitch=pitch, head_roll=roll,
             method=est.head.method,
             on_screen=on_screen,

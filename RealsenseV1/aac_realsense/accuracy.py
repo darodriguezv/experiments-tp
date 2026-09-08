@@ -266,6 +266,7 @@ def run(settings: Settings, rows: int = 3, cols: int = 3,
     samples: list[dict] = []
     frames_seen = faces_seen = pnp_frames = 0
     depth_coverages: list[float] = []
+    frame_fill: list[float] = []
     confidences: list[float] = []
     iris_radii: list[float] = []
     brightness: list[float] = []
@@ -317,7 +318,7 @@ def run(settings: Settings, rows: int = 3, cols: int = 3,
 
                     if recording:
                         frames_seen += 1
-                        depth_coverages.append(frame.depth_fill_rate())
+                        frame_fill.append(frame.depth_fill_rate())
                         if frames_seen % 10 == 0:
                             brightness.append(float(cv2.cvtColor(
                                 frame.color, cv2.COLOR_BGR2GRAY).mean()))
@@ -325,6 +326,7 @@ def run(settings: Settings, rows: int = 3, cols: int = 3,
                             faces_seen += 1
                             confidences.append(sample.confidence)
                             iris_radii.append(sample.iris_px)
+                            depth_coverages.append(sample.rigid_coverage)
                             if sample.method == "pnp":
                                 pnp_frames += 1
 
@@ -408,6 +410,7 @@ def run(settings: Settings, rows: int = 3, cols: int = 3,
         "brightness": float(np.mean(brightness)) if brightness else 0.0,
         "face_rate": faces_seen / max(frames_seen, 1),
         "depth_coverage": float(np.mean(depth_coverages)) if depth_coverages else 0.0,
+        "frame_fill": float(np.mean(frame_fill)) if frame_fill else 0.0,
         "pnp_rate": pnp_frames / max(faces_seen, 1),
         "mean_confidence": float(np.mean(confidences)) if confidences else 0.0,
         "iris_px": float(np.mean(iris_radii)) if iris_radii else 0.0,
@@ -435,7 +438,10 @@ def _report(stats: dict, per_point: list[dict], env: dict, invariance: dict,
     print(f"  estimador={settings.estimator}  suavizado={settings.smoother}  "
           f"brillo={env['brightness']:.0f}/255  "
           f"caras={env['face_rate'] * 100:.0f}%")
-    print(f"  profundidad sobre la cara {env['depth_coverage'] * 100:.0f}%   "
+    print(f"  profundidad sobre los puntos rígidos "
+          f"{env['depth_coverage'] * 100:.0f}%   "
+          f"(del cuadro entero {env['frame_fill'] * 100:.0f}%, que es normal "
+          f"que sea bajo)   "
           f"pose por PnP {env['pnp_rate'] * 100:.0f}%   "
           f"confianza media {env['mean_confidence']:.2f}")
     print(f"  escala medida: {px_per_deg:.1f} px por grado "

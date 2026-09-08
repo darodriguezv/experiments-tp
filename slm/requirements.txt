@@ -1,0 +1,7 @@
+# Deliberadamente mínimo. Todo el arnés -corpus, métricas, reporte- corre con
+# la biblioteca estándar más numpy; la inferencia va por HTTP a Ollama, que se
+# instala aparte (https://ollama.com/download) y no es un paquete de Python.
+#
+# Sin `requests`: urllib alcanza y es una dependencia menos en una máquina que
+# eventualmente va a ser un dispositivo dedicado.
+numpy>=1.24

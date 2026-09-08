@@ -228,6 +228,46 @@ def _accents() -> str:
 # ------------------------------------------------------------------ geometry
 
 
+def _speech_receives_accents() -> str:
+    """La ñ tiene que llegar al sintetizador, no solo dibujarse bien.
+
+    El chequeo `_accents` de arriba cubre el camino visual: que "BAÑO" se
+    renderice distinto de "BANO", que era el bug de las fuentes Hershey de
+    OpenCV. El camino de **audio** no tenía ninguna verificación, porque nadie
+    escucha en un test - y ahí había un bug real y peor.
+
+    La versión anterior de `tts` pasaba el texto por stdin de PowerShell, que lo
+    decodifica con la codepage OEM (cp437/850 en una instalación en español).
+    El byte 0xD1 de la ñ llegaba como ╤ - codepoint 9572, un carácter de dibujo
+    de cajas. El aparato decía "ba" y un ruido, no "baño". La voz española nunca
+    tuvo el problema: nunca recibió una ñ.
+
+    Ahora el texto viaja en base64, que es ASCII puro, y esto compara codepoints
+    en vez de sonido - así el camino de audio queda asertado sin necesidad de
+    oír nada.
+    """
+    from . import tts
+
+    if not tts.available():
+        return "sin PowerShell: no se puede probar la voz acá"
+
+    palabras = ["BAÑO", "SÍ", "MÁS", "NIÑO", "AÑO", "¿me das agua?",
+                "me duele mucho"]
+    for texto in palabras:
+        got = tts.codepoints_roundtrip(texto)
+        if got is None:
+            return "el transporte de voz no respondió; no se pudo verificar"
+        want = [ord(c) for c in texto]
+        assert got == want, (
+            f"{texto!r} llegó al sintetizador como {got}, no como {want}. "
+            f"La ñ es el codepoint 241; si aparece 9572 volvió el bug de "
+            f"codepage."
+        )
+    voz = tts.voice_name()
+    return (f"{len(palabras)} textos con ñ y acentos llegan intactos; "
+            f"voz: {voz or 'ninguna en español'}")
+
+
 def _intrinsics() -> str:
     intrin = Intrinsics.synthetic(1280, 720)
     pts = np.array([[640.0, 360.0], [100.0, 80.0], [1200.0, 700.0]])
@@ -1042,6 +1082,7 @@ CHECKS = (
     ("deproyección == la del SDK", _deprojection_matches_sdk),
     ("pantallas", _monitors),
     ("acentos en español", _accents),
+    ("la voz recibe la ñ y los acentos", _speech_receives_accents),
     ("intrínsecos y distorsión", _intrinsics),
     ("primitivas geométricas", _geometry_primitives),
     ("kabsch y su versión robusta", _kabsch),
