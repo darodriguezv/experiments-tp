@@ -1,0 +1,16 @@
+# Los dos entornos de este módulo, y son dos a propósito: .conda tiene
+# Python 3.12 con la MediaPipe actual, .conda311 tiene Python 3.11 con
+# mediapipe 0.10.10, que es la única que conserva la API legacy que usa
+# GazeFollower. Se reconstruyen desde requirements.txt.
+#
+# No es hermetismo: dentro de .conda311 hay un jaxlib de 224 MB y dentro de
+# .conda otro de 208 MB, y GitHub rechaza cualquier archivo de más de 100 MB.
+# Un solo commit con estas carpetas adentro deja la rama impusheable.
+.conda/
+.conda311/
+
+__pycache__/
+*.pyc
+
+# El log de GazeFollower, que Log.init() escribe en el camino normal.
+*.log
