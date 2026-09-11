@@ -67,7 +67,7 @@ def leaderboard(scores: list[metrics.ItemScore], max_latency_s: float = 4.0
 
     head = (f"{'modelo':<14}{'variante':<16}{'rec@3':>7}{'seguro':>8}"
             f"{'inv':>6}{'polar':>7}{'suav':>6}{'liter':>7}{'divers':>8}"
-            f"{'modelo s':>9}{'prefill':>8}{'json':>6}  apto")
+            f"{'opc':>6}{'modelo s':>9}{'prefill':>8}{'json':>6}  apto")
     out = [head, "-" * len(head)]
     for model, variant, agg in rows:
         out.append(

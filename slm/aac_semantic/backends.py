@@ -56,9 +56,20 @@ not depend on model size, so use the largest one that fits".
 # * **Privacy.** The content is medical and it is spoken by someone who cannot
 #   easily consent again later. It should not leave the room.
 #
-# The Qwen family appears at three sizes on purpose: same training recipe, only
+# The Qwen family appears at four sizes on purpose: same training recipe, only
 # the parameter count changes, which is the only clean way to ask "does size
 # matter for *this* task" rather than "is model A better than model B".
+#
+# qwen2.5:7b is the one entry that breaks the 4B ceiling, and it is here to
+# *measure the ceiling*, not to replace it. The SLM constraint above is a
+# design claim, and a design claim that is never tested is just a preference.
+# The 7b arm answers the only question that can falsify it: how much fidelity
+# are we giving up by refusing to go bigger? If it wins clearly, the constraint
+# is expensive and the thesis has to say so out loud. If it does not, the
+# constraint is free - which is a stronger result than never having asked.
+#
+# Either way it is not the default. It costs ~4.7 GB of RAM and the latency
+# budget is the binding one on this hardware.
 CANDIDATE_MODELS: dict[str, dict] = {
     "qwen2.5:0.5b": {
         "size_gb": 0.4, "params": "0.5B", "license": "Apache-2.0",
@@ -74,6 +85,13 @@ CANDIDATE_MODELS: dict[str, dict] = {
         "size_gb": 1.9, "params": "3B", "license": "Qwen Research",
         "why": "el techo de la familia; con 0.5b y 1.5b forma la curva de "
                "escala a receta constante",
+    },
+    "qwen2.5:7b": {
+        "size_gb": 4.7, "params": "7B", "license": "Apache-2.0",
+        "why": "el brazo que rompe el techo de 4B a propósito: mide cuánto "
+               "cuesta la restricción SLM en vez de asumirla. Misma receta que "
+               "0.5b/1.5b/3b, así que extiende la curva de escala a un punto "
+               "más sin cambiar ninguna otra variable",
     },
     "llama3.2:1b": {
         "size_gb": 1.3, "params": "1B", "license": "Llama 3.2",

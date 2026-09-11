@@ -490,6 +490,73 @@ def _ollama_status() -> str:
     return f"Ollama activo, {len(installed)} modelo(s): {', '.join(installed[:4])}"
 
 
+def _guard_flag_reaches_the_metrics() -> str:
+    """`rescore --guard` tiene que cambiar los números, no solo parsear.
+
+    Esto es una prueba de cableado, no de lógica, y existe porque el cableado
+    falló de verdad: `main.py` declaraba `--guard`, argparse lo aceptaba sin
+    chistar, y después llamaba a `runner.rescore(path, corpus)` sin pasarlo.
+    El flag no hacía nada.
+
+    Lo peor no fue el bug sino su forma: no hay error, no hay traza, y el
+    reporte sale completo y creíble. Durante todo ese tiempo «medir lo que
+    aporta el filtro» devolvía exactamente las mismas cifras que no medirlo, y
+    la única señal era una tabla con 15% de fallo de polaridad bajo un filtro
+    que garantiza 0% por construcción - visible solo si uno compara las dos
+    salidas lado a lado y encima desconfía.
+
+    Por eso la prueba es de punta a punta, desde `argv`: cualquier test que
+    llame a `runner.rescore(guard=True)` directamente pasa aunque la CLI siga
+    tirando el flag a la basura, que es precisamente el caso que hay que
+    atrapar.
+    """
+    import io
+    import json
+    import tempfile
+    from contextlib import redirect_stdout
+    from pathlib import Path
+
+    import main as cli
+
+    from . import guard
+
+    corpus = runner.load_corpus()
+    # Un ítem que niega, con un candidato que pierde la negación: el filtro
+    # tiene que descartarlo, y sin filtro tiene que contar como fallo.
+    item = next((i for i in corpus if guard.needs_negation(i["input"])), None)
+    if item is None:
+        raise AssertionError("el corpus no tiene ningún ítem con negación")
+
+    score = metrics.score_item(item, ["quiero agua"], "lineas", 0.1,
+                               model="fake", variant="v0-minimo")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "run-fake.jsonl"
+        path.write_text(json.dumps(score.__dict__, ensure_ascii=False) + chr(10),
+                        encoding="utf-8")
+
+        def polaridad(argv):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cli.main(argv)
+            for line in buf.getvalue().splitlines():
+                if line.startswith("fake "):
+                    # ... rec seguro inv polar ...
+                    return line.split()[5]
+            raise AssertionError("el reporte no tiene la fila del modelo")
+
+        sin = polaridad(["rescore", str(path)])
+        con = polaridad(["rescore", str(path), "--guard"])
+
+    if sin == con:
+        raise AssertionError(
+            f"--guard no cambió nada: polaridad {sin} con y sin filtro. "
+            "Revisá que main.py se lo pase a runner.rescore()")
+    if con != "0%":
+        raise AssertionError(
+            f"con el filtro la polaridad debería ser 0% por construcción, dio {con}")
+    return f"polaridad {sin} sin filtro -> {con} con filtro; el flag llega"
+
+
 CHECKS = (
     ("el corpus carga y valida", _corpus_loads),
     ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
@@ -507,6 +574,7 @@ CHECKS = (
     ("parsea todas las formas de respuesta", _parses_every_shape),
     ("las variantes de prompt están anidadas", _prompt_variants_are_nested),
     ("la puerta de aptitud es estricta", _usable_gate_is_strict),
+    ("--guard llega hasta las métricas", _guard_flag_reaches_the_metrics),
     ("extremo a extremo con modelo falso", _end_to_end_with_scripted_model),
     ("estado de Ollama", _ollama_status),
 )

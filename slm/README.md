@@ -6,7 +6,9 @@ qué hacer con lo que escribió: convertir `AGUA NO` en algo que una persona
 pueda decir en voz alta.
 
 Modelos **pequeños, abiertos y locales** (SLM, ≤ 4B parámetros), por
-prompting. Sin ajuste fino todavía.
+prompting. Sin ajuste fino todavía. Con un brazo de 7B que cruza ese techo a
+propósito, para medir qué cuesta la restricción — ver
+[El techo de 4B](#el-techo-de-4b-medido-y-no-asumido).
 
 ## La decisión de diseño, primero
 
@@ -131,6 +133,55 @@ este problema que un modelo de 70B en la nube, incluso si el de 70B redacta
 mejor. La pregunta del experimento no es cuál escribe más lindo, es **cuál es el
 más chico que todavía es fiel**.
 
+### El techo de 4B, medido y no asumido
+
+Hay una excepción deliberada en la tabla de abajo: **`qwen2.5:7b`**. Rompe el
+límite, y está justamente para eso.
+
+«4B o menos» es una afirmación de diseño, y una afirmación de diseño que nunca
+se pone a prueba es solo una preferencia con buena prosa. El brazo de 7B
+contesta lo único que puede refutarla: **¿cuánta fidelidad estamos regalando
+por negarnos a crecer?** Si gana con claridad, la restricción es cara y la tesis
+tiene que decirlo; si no gana, la restricción sale gratis — que es un resultado
+más fuerte que no haber preguntado nunca.
+
+**El resultado, medido.** 2 modelos x 2 variantes x 40 ítems, misma sesión,
+misma cuantización (Q4_K_M en los cuatro tamaños), con el filtro aplicado:
+
+| modelo | rec@3 | seguro | divers | **opc** | p50 |
+| --- | --- | --- | --- | --- | --- |
+| `qwen2.5:3b` | 89 % | 99 % | 0.55 | **3.0** | 0.25 s |
+| `qwen2.5:7b` | 86 % | 99 % | 0.37 | **2.4** | 0.43 s |
+
+El 7B **no gana**. Empata en seguridad, y en recall la diferencia de 3 puntos
+sobre n=80 es ruido (z = −0.48). Lo único que cambia de verdad es lo que
+*debería* haber mejorado y empeoró: **2.39 opciones contra 3.00** (t = −4.10),
+con la diversidad cayendo de 0.55 a 0.37. Y cuesta 2.4x la RAM y 1.7x la
+latencia.
+
+**Por qué, y por qué importa más allá de este módulo.** El 7B es mejor modelo en
+el sentido habitual: más consistente, más seguro de su mejor respuesta. Pedirle
+tres candidatos devuelve tres parafraseos de la misma frase, y el `dedupe` los
+colapsa correctamente en uno o dos. El 3B, menos seguro, propone tres lecturas
+distintas — que es exactamente el entregable.
+
+O sea: **acá la capacidad del modelo se manifiesta como consistencia, y la
+consistencia es el enemigo.** El producto no es la mejor frase, es un conjunto
+de opciones entre las que la persona elige con la mirada. Es el mismo fallo que
+el usuario reportó a mano —«al poner *por favor, comida*, sale solo *comida* como
+opción»— y el modelo más grande lo empeora.
+
+La restricción de ≤ 4B, entonces, **sale gratis en fidelidad y encima paga en
+variedad**. Eso es un resultado más fuerte que no haber preguntado, y es el que
+la tesis puede defender: no «elegimos SLM porque el hardware manda», sino
+«medimos el modelo grande y era peor para esta tarea».
+
+Queda una advertencia honesta: esto compara `qwen2.5` consigo mismo. No dice que
+ningún modelo grande sirva — dice que *más parámetros con la misma receta* no
+compra nada acá. Un modelo grande con muestreo explícitamente diverso (más
+temperatura, o n muestras independientes en vez de tres en una respuesta) es una
+hipótesis distinta y sin probar.
+
 ## Los modelos
 
 | modelo | params | tamaño | licencia | por qué está |
@@ -138,6 +189,7 @@ más chico que todavía es fiel**.
 | `qwen2.5:0.5b` | 0.5B | 0.4 GB | Apache-2.0 | el piso: ¿puede algo tan chico? Si sí, corre en cualquier cosa |
 | `qwen2.5:1.5b` | 1.5B | 1.0 GB | Apache-2.0 | el candidato realista: licencia limpia, entra en RAM sin GPU |
 | `qwen2.5:3b` | 3B | 1.9 GB | Qwen Research | techo de la familia |
+| `qwen2.5:7b` | 7B | 4.7 GB | Apache-2.0 | **rompe el límite de 4B a propósito**: mide cuánto cuesta la restricción en vez de asumirla |
 | `llama3.2:1b` | 1B | 1.3 GB | Llama 3.2 | segunda familia; Llama 3.2 declara español oficialmente soportado |
 | `llama3.2:3b` | 3B | 2.0 GB | Llama 3.2 | el par de `qwen2.5:3b`: mismo tamaño, otra receta |
 | `gemma2:2b` | 2B | 1.6 GB | Gemma Terms | tercera familia, en el medio del rango |
@@ -146,7 +198,7 @@ más chico que todavía es fiel**.
 
 Dos elecciones deliberadas en esa lista:
 
-**La familia Qwen aparece en tres tamaños.** Misma receta de entrenamiento, solo
+**La familia Qwen aparece en cuatro tamaños.** Misma receta de entrenamiento, solo
 cambia el número de parámetros — es la única forma limpia de preguntar «¿importa
 el tamaño *para esta tarea*?» en vez de «¿es el modelo A mejor que el B?».
 

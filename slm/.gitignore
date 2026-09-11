@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# results/ SÍ se versiona: son las respuestas crudas de cada corrida, y lo que
+# permite re-medir con métricas nuevas sin volver a inferir (`rescore`). Es el
+# dato del experimento, no un artefacto.

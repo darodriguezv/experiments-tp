@@ -226,7 +226,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in ("report", "rescore"):
         path = _resolve_run(args.run)
         if args.command == "rescore":
-            scores = runner.rescore(path, runner.load_corpus())
+            scores = runner.rescore(path, runner.load_corpus(),
+                                    guard=args.guard)
             print(f"[re-medido] {len(scores)} respuestas de {path.name} con las "
                   f"métricas actuales\n")
         else:
