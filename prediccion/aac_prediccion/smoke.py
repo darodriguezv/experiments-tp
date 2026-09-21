@@ -59,7 +59,17 @@ def _no_prediction_without_evidence() -> str:
     # Una sola observación tampoco alcanza: min_evidence = 2.
     model.observe(["quiero", "agua"], now=1000.0)
     assert Predictor(model).propose([], "core", now=1000.0) == []
-    return "sin datos no hay casillas; una sola observación tampoco"
+
+    # Y con dos SÍ, aunque el decaimiento deje el peso en 1.9999998. El umbral
+    # tiene que significar el número que dice: sin la tolerancia de EPS esto
+    # exigía tres repeticiones y nadie lo habría notado, porque «todavía no
+    # aprendió» es una explicación que se acepta sola.
+    model.observe(["quiero", "agua"], now=1000.5)
+    props = Predictor(model).propose([], "core", now=1001.0)
+    assert any(p.tokens == ["quiero", "agua"] for p in props), \
+        f"dos repeticiones y min_evidence=2 no alcanzaron: {props}"
+    return ("sin datos no hay casillas; una observación tampoco; "
+            "dos exactamente sí")
 
 
 def _zero_saving_never_takes_a_slot() -> str:
@@ -300,8 +310,9 @@ def _demo_renders_headless() -> str:
         assert max(t.y2 for t in tiles) <= demo.HEIGHT, "celdas fuera de pantalla"
 
         prop = zones[0][0]
-        state.dwells += 1
+        state.dwells += 1                    # el toque en la casilla
         state.words.extend(prop.tokens)
+        state.dwells += 1                    # el toque en HABLAR
         # Sin voz: un chequeo que habla solo es un chequeo que nadie corre dos
         # veces, y encima dice cosas médicas en voz alta sin avisar.
         hablar = demo.tts.speak

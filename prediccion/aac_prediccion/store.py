@@ -63,6 +63,9 @@ DEFAULT_HALFLIFE_DAYS = 30.0
 """Cuánto tarda una observación en valer la mitad. Treinta días es un punto de
 partida, no un hallazgo: es el parámetro que `main.py sweep` barre."""
 
+EPS = 1e-6
+"""Tolerancia al comparar contra `min_evidence`. Ver la nota de ese campo."""
+
 MAX_ORDER = 3
 """Hasta trigramas. Más orden necesita más datos de los que una persona genera
 en meses, y el respaldo a bigramas ya cubre el caso."""
@@ -91,8 +94,15 @@ class UserModel:
 
     halflife_days: float = DEFAULT_HALFLIFE_DAYS
     min_evidence: float = 2.0
-    """Peso mínimo para que algo se ofrezca. Por debajo, la casilla queda vacía:
-    ver la nota sobre arranque en frío arriba."""
+    """Repeticiones necesarias para que algo se ofrezca. Por debajo, la casilla
+    queda vacía: ver la nota sobre arranque en frío arriba.
+
+    Se compara con la tolerancia de `EPS`, y sin eso el número miente. Una
+    observación aporta 1.0, pero el decaimiento la descuenta apenas pasa el
+    tiempo: tras dos repeticiones el peso vale 1.9999998, que es menor que 2.0.
+    O sea que `min_evidence = 2` exigía en realidad **tres** repeticiones, por
+    redondeo y no por decisión. Un umbral que no significa lo que dice es peor
+    que uno mal elegido: al menos el mal elegido se puede discutir."""
 
     ngrams: dict[str, dict[str, _Count]] = field(default_factory=dict)
     phrases: dict[str, _Count] = field(default_factory=dict)
@@ -158,7 +168,8 @@ class UserModel:
             ranked = sorted(
                 ((s, c.value(now, hl)) for s, c in table.items() if s != "\x03"),
                 key=lambda p: -p[1])
-            ranked = [(s, w) for s, w in ranked if w >= self.min_evidence]
+            ranked = [(s, w) for s, w in ranked
+                      if w >= self.min_evidence - EPS]
             if ranked:
                 return ranked[:limit]
         return []
@@ -182,7 +193,7 @@ class UserModel:
             if tuple(tokens[:len(prefix)]) != prefix:
                 continue
             w = count.value(now, hl)
-            if w >= self.min_evidence:
+            if w >= self.min_evidence - EPS:
                 out.append((tokens, w))
         out.sort(key=lambda p: (-p[1], len(p[0])))
         return out[:limit]

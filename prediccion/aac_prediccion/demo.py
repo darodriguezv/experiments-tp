@@ -172,7 +172,11 @@ def _speak(state: State) -> None:
     tokens = state.tokens
     if not tokens:
         return
-    state.dwells += 1                       # la permanencia de HABLAR
+    # La permanencia de HABLAR ya la contó `_on_tile`, que cobra todo toque.
+    # Contarla también acá inflaba cada enunciado en uno y hacía que el
+    # contador declarara menos ahorro del real - un sesgo hacia el pesimismo,
+    # que es el que menos se nota porque nadie sospecha de un número que le va
+    # en contra.
     baseline, _ = board.dwells_for(tokens, state.page_at_start)
     baseline += board.SPEAK_DWELLS
 
