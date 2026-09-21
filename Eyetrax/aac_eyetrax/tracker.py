@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -410,17 +411,45 @@ class DwellSelector:
 
     Short gaze losses (blinks, a dropped frame) are tolerated for
     ``blink_grace_ms`` so a natural blink does not restart the dwell.
+
+    El problema que resuelve `step()`
+    ---------------------------------
+    La versión por objetivo -`update(target)`- reinicia la permanencia en
+    cuanto el objetivo cambia, aunque sea **un solo cuadro**. La mirada no se
+    queda quieta: microsacadas, temblor del estimador y un cursor a 14 fps
+    hacen que el punto cruce el borde de la celda varias veces por segundo. El
+    resultado es que la barra de progreso se reinicia sola y seleccionar se
+    vuelve imposible por más quieto que uno mire.
+
+    `step()` lo arregla con dos cosas que se complementan:
+
+    * **Se decide sobre la mediana de una ventana corta**, no sobre el punto
+      del cuadro. La mediana -y no el promedio- porque el ruido de mirada tiene
+      colas pesadas: una sola muestra disparada corre el promedio y no corre la
+      mediana.
+    * **La celda sostenida se pega**: mientras la mediana siga dentro de esa
+      celda *agrandada por un margen*, sigue siendo el objetivo. Salir exige
+      irse claramente, no rozar el borde.
+
+    Lo que **no** se hace es suavizar más el cursor. Alcanzaría para estabilizar
+    el punto, pero el suavizado cuesta retardo, y el retardo se paga en cada
+    selección. Acá el cursor se puede seguir dibujando con el punto vivo -que es
+    lo que le dice a la persona hacia dónde va- mientras la selección se decide
+    sobre la mediana. Estabilidad donde hace falta, sin lentitud donde molesta.
     """
 
     def __init__(self, settings: Settings):
         self.dwell = settings.dwell_ms / 1000.0
         self.refractory = settings.refractory_ms / 1000.0
         self.grace = settings.blink_grace_ms / 1000.0
+        self.window = settings.fixation_window_ms / 1000.0
+        self.stick = settings.stick_margin_ratio
 
         self.target: object | None = None
         self._started_at = 0.0
         self._lost_at: float | None = None
         self._blocked_until = 0.0
+        self._points: deque = deque()
 
     def reset(self) -> None:
         self.target = None
@@ -432,6 +461,57 @@ class DwellSelector:
             self.refractory if seconds is None else seconds
         )
         self.reset()
+        # La ventana también se vacía: después de cambiar de página, los puntos
+        # de la página anterior describen una pantalla que ya no está.
+        self._points.clear()
+
+    # ------------------------------------------------- fijación y pegado
+
+    def feed(self, x: int, y: int, now: float) -> tuple[int, int]:
+        """Agrega una muestra y devuelve el punto estable de la ventana."""
+        self._points.append((now, x, y))
+        cutoff = now - self.window
+        while len(self._points) > 1 and self._points[0][0] < cutoff:
+            self._points.popleft()
+        xs = sorted(p[1] for p in self._points)
+        ys = sorted(p[2] for p in self._points)
+        mid = len(xs) // 2
+        if len(xs) % 2:
+            return xs[mid], ys[mid]
+        return (xs[mid - 1] + xs[mid]) // 2, (ys[mid - 1] + ys[mid]) // 2
+
+    def _still_held(self, point: tuple[int, int], bounds) -> bool:
+        """¿La mediana sigue dentro de la celda sostenida, con margen?"""
+        if self.target is None or bounds is None:
+            return False
+        box = bounds(self.target)
+        if box is None:
+            return False
+        x1, y1, x2, y2 = box
+        mx = (x2 - x1) * self.stick
+        my = (y2 - y1) * self.stick
+        return (x1 - mx) <= point[0] < (x2 + mx) and \
+               (y1 - my) <= point[1] < (y2 + my)
+
+    def step(self, sample, hit_test, bounds=None, now=None):
+        """Un cuadro completo. Devuelve (progreso, disparado, punto_estable).
+
+        `hit_test(x, y)` da el objetivo bajo un punto; `bounds(objetivo)` da su
+        caja, y es lo que habilita el pegado. Sin `bounds` se comporta como
+        antes, solo que decidiendo sobre la mediana.
+        """
+        now = time.time() if now is None else now
+        if sample is None or not getattr(sample, "ok", False):
+            progress, fired = self.update(None, now)
+            return progress, fired, None
+
+        stable = self.feed(sample.x, sample.y, now)
+        if self._still_held(stable, bounds):
+            target = self.target
+        else:
+            target = hit_test(*stable)
+        progress, fired = self.update(target, now)
+        return progress, fired, stable
 
     def update(self, target: object | None, now: float | None = None):
         """Feed the currently-gazed target.

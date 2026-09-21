@@ -139,6 +139,10 @@ def _settings(args) -> Settings:
         s.model_path = Path(args.model_path)
     if hasattr(args, "dwell"):
         s.dwell_ms = args.dwell
+    if getattr(args, "stick", None) is not None:
+        s.stick_margin_ratio = args.stick
+    if getattr(args, "fixation_ms", None) is not None:
+        s.fixation_window_ms = args.fixation_ms
     if hasattr(args, "no_speech"):
         s.speak = not args.no_speech
     if hasattr(args, "no_log"):
@@ -179,6 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         "--dwell", type=int, default=800,
         help="tiempo de permanencia en ms (por defecto 800)",
     )
+    p_pipe.add_argument("--stick", type=float, default=None,
+                        help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
+    p_pipe.add_argument("--fixation-ms", type=int, default=None,
+                        help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_pipe.add_argument(
         "--skip-calibration", action="store_true",
         help="reutiliza models/gaze_model.pkl en vez de calibrar de nuevo",
@@ -201,6 +209,10 @@ def main(argv: list[str] | None = None) -> int:
         "--dwell", type=int, default=800,
         help="tiempo de permanencia en ms (por defecto 800)"
     )
+    p_board.add_argument("--stick", type=float, default=None,
+                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
+    p_board.add_argument("--fixation-ms", type=int, default=None,
+                         help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_board.add_argument("--no-speech", action="store_true",
                          help="desactiva la voz")
     p_board.add_argument("--no-log", action="store_true",

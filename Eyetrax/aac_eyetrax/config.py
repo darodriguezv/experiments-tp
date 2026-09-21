@@ -69,6 +69,20 @@ class Settings:
     blink_grace_ms: int = 250
     """Losing the face (blink) for less than this does not reset the dwell."""
 
+    fixation_window_ms: int = 320
+    """Ventana sobre la que se toma la mediana para decidir la celda.
+
+    Corta a propósito. Más larga estabiliza más pero retrasa el cambio de
+    celda, y ese retraso se siente al moverse de una a otra. A 14 fps son unas
+    cinco muestras, que ya alcanzan para que una sola disparada no mande."""
+
+    stick_margin_ratio: float = 0.35
+    """Cuánto se agranda la celda sostenida, como fracción de su tamaño.
+
+    Es el "imán": mientras la mediana siga dentro de la celda agrandada, sigue
+    siendo el objetivo y la permanencia no se reinicia. 0 = sin pegado, que es
+    el comportamiento anterior y el que hacía imposible seleccionar."""
+
     # --- UI ---
     check_position: bool = True
     """Show the face-placement guide before running. A gaze model only holds
@@ -98,6 +112,13 @@ class Settings:
             raise ValueError("ema_alpha must be in [0.0, 1.0]")
         if self.dwell_ms <= 0:
             raise ValueError("dwell_ms must be > 0")
+        if self.fixation_window_ms < 0:
+            raise ValueError("fixation_window_ms must be >= 0")
+        if not 0.0 <= self.stick_margin_ratio <= 1.0:
+            # Más de 1.0 significa que la celda sostenida se agranda más que su
+            # propio tamaño, y entonces se traga a las vecinas: nunca se podría
+            # cambiar de celda.
+            raise ValueError("stick_margin_ratio must be in [0.0, 1.0]")
         if bool(self.capture_width) != bool(self.capture_height):
             raise ValueError(
                 "set both capture_width and capture_height, or neither"

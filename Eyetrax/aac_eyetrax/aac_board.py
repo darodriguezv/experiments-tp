@@ -183,16 +183,27 @@ def run(settings: Settings, make_tracker=None) -> None:
             for frame in iter_frames(cap):
                 sample = tracker.process(frame)
 
-                hovered: Tile | None = None
-                if sample.ok:
+                # La celda se decide sobre la mediana de una ventana corta y se
+                # "pega" mientras esa mediana no salga de la celda agrandada.
+                # Con el punto crudo de cada cuadro, una sola muestra que cruza
+                # el borde reiniciaba la permanencia y seleccionar era
+                # imposible: ver DwellSelector.step.
+                def _hit(x, y):
                     for t in tiles:
-                        if t.contains(sample.x, sample.y):
-                            hovered = t
-                            break
+                        if t.contains(x, y):
+                            return t.tile_id
+                    return None
 
-                progress, fired_id = dwell.update(
-                    hovered.tile_id if hovered else None
-                )
+                def _bounds(tile_id):
+                    t = by_id.get(tile_id)
+                    return None if t is None else (t.x1, t.y1, t.x2, t.y2)
+
+                progress, fired_id, stable = dwell.step(sample, _hit, _bounds)
+                # Se resalta la celda que ESTÁ acumulando, no la que queda bajo
+                # el punto: con el pegado las dos pueden diferir, y mostrar la
+                # segunda haría que la barra de progreso apareciera sobre una
+                # celda distinta de la que se va a seleccionar.
+                hovered = by_id.get(dwell.target) if dwell.target else None
 
                 if fired_id is not None:
                     tile = by_id[fired_id]

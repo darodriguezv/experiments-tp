@@ -209,6 +209,88 @@ def _dwell() -> str:
     return "fire, refractory, target switch, blink grace, long loss"
 
 
+def _dwell_survives_jitter() -> str:
+    """Una mirada temblorosa sobre una celda tiene que poder seleccionarla.
+
+    Reproduce el fallo que hacía inusable el tablero: la mirada se queda sobre
+    una celda pero el punto tiembla ±45 px alrededor de su borde, así que con
+    `update(hit_test(punto))` el objetivo cambiaba cada pocos cuadros y la
+    permanencia se reiniciaba sola. La barra de progreso latía sin llegar nunca.
+
+    El temblor de acá no es exagerado: sobre una celda de 384x216 px, ±45 px es
+    menos de un cuarto de su alto, y es lo que produce un estimador a 14 fps
+    entre microsacadas.
+
+    Se comprueban las dos mitades: que el camino viejo efectivamente falla -si
+    algún día deja de fallar, este test está midiendo otra cosa- y que `step`
+    con pegado sí dispara.
+    """
+    import random
+
+    from .config import Settings
+    from .tracker import DwellSelector, GazeSample
+
+    # Dos celdas pegadas, como en el tablero.
+    cajas = {"A": (0, 0, 384, 216), "B": (0, 216, 384, 432)}
+
+    def hit(x, y):
+        for k, (x1, y1, x2, y2) in cajas.items():
+            if x1 <= x < x2 and y1 <= y < y2:
+                return k
+        return None
+
+    def bounds(k):
+        return cajas.get(k)
+
+    def mirada(seed):
+        """Mirando el borde inferior de A, con temblor que cruza a B."""
+        rng = random.Random(seed)
+        for i in range(40):
+            yield (1000.0 + i * 0.07,                 # ~14 fps
+                   192 + rng.randint(-20, 20),
+                   200 + rng.randint(-45, 45))
+
+    ajustes = Settings(dwell_ms=800, refractory_ms=600, blink_grace_ms=250)
+
+    # --- camino viejo: por punto crudo, sin ventana ni pegado ---------------
+    viejo = DwellSelector(ajustes)
+    disparos_viejo = 0
+    for t, x, y in mirada(7):
+        if viejo.update(hit(x, y), t)[1] is not None:
+            disparos_viejo += 1
+    assert disparos_viejo == 0, (
+        "el camino por punto crudo seleccionó pese al temblor: este test ya no "
+        "reproduce el problema que motivó `step`")
+
+    # --- camino nuevo: mediana + pegado ------------------------------------
+    nuevo = DwellSelector(ajustes)
+    disparos_nuevo, celda = 0, None
+    for t, x, y in mirada(7):
+        _, fired, _ = nuevo.step(GazeSample(ok=True, x=x, y=y, face=True),
+                                 hit, bounds, now=t)
+        if fired is not None:
+            disparos_nuevo += 1
+            celda = fired
+    assert disparos_nuevo >= 1, "con mediana y pegado tampoco llegó a disparar"
+    assert celda == "A", f"seleccionó {celda!r} en vez de la celda mirada"
+
+    # Y el pegado no puede impedir un cambio real de celda: si la mirada se va
+    # de verdad al centro de B, el objetivo tiene que seguirla.
+    lejos = DwellSelector(ajustes)
+    for i in range(12):
+        lejos.step(GazeSample(ok=True, x=192, y=100, face=True), hit, bounds,
+                   now=2000.0 + i * 0.07)
+    assert lejos.target == "A"
+    for i in range(12):
+        lejos.step(GazeSample(ok=True, x=192, y=330, face=True), hit, bounds,
+                   now=2001.0 + i * 0.07)
+    assert lejos.target == "B", (
+        f"el pegado no soltó la celda: sigue en {lejos.target!r}. Un margen "
+        f"demasiado grande hace imposible cambiar de celda.")
+    return ("con temblor de ±45 px: por punto crudo 0 selecciones, "
+            "con mediana y pegado 1; y un cambio real de celda sí pasa")
+
+
 def _board() -> str:
     from .aac_board import Message
     from .board_layout import PAGES, layout
@@ -626,6 +708,7 @@ CHECKS = [
     ("guardado del modelo", _persistence),
     ("suavizadores", _smoothers),
     ("selección por permanencia", _dwell),
+    ("la permanencia sobrevive al temblor", _dwell_survives_jitter),
     ("geometría del tablero", _board),
     ("firmas de ui.*", _ui_signatures),
     ("acentos y ñ", _accents),

@@ -96,6 +96,10 @@ def _settings(args) -> Settings:
         s.check_position = False
     if getattr(args, "dwell", None):
         s.dwell_ms = args.dwell
+    if getattr(args, "stick", None) is not None:
+        s.stick_margin_ratio = args.stick
+    if getattr(args, "fixation_ms", None) is not None:
+        s.fixation_window_ms = args.fixation_ms
     s.validate()
     return s
 
@@ -128,6 +132,10 @@ def main(argv: list[str] | None = None) -> int:
     p_board = sub.add_parser("board", help="tablero por permanencia")
     _common(p_board)
     p_board.add_argument("--dwell", type=int, default=800)
+    p_board.add_argument("--stick", type=float, default=None,
+                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
+    p_board.add_argument("--fixation-ms", type=int, default=None,
+                         help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_board.add_argument("--no-speech", action="store_true")
 
     p_pipe = sub.add_parser("pipeline", help="flujo completo")
@@ -135,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     p_pipe.add_argument("--method", default="9point",
                         choices=("5point", "9point", "13point"))
     p_pipe.add_argument("--dwell", type=int, default=800)
+    p_pipe.add_argument("--stick", type=float, default=None,
+                        help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
+    p_pipe.add_argument("--fixation-ms", type=int, default=None,
+                        help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_pipe.add_argument("--skip-calibration", action="store_true")
     p_pipe.add_argument("--no-accuracy", action="store_true")
 
