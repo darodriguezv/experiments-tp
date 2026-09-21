@@ -204,6 +204,7 @@ def run(
     hold_s: float = 2.0,
     settle_s: float = 0.7,
     first_extra_settle_s: float = 1.3,
+    make_tracker=None,
 ) -> dict | None:
     """Walk a rows x cols grid, sampling gaze error at each point.
 
@@ -221,7 +222,7 @@ def run(
     frames_seen = faces_seen = 0
     brightness: list[float] = []
 
-    with GazeTracker(settings) as tracker:
+    with (make_tracker or GazeTracker)(settings) as tracker:
         tracker.load()
         w, h = tracker.screen_w, tracker.screen_h
         points = compute_grid_points_from_shape(

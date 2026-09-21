@@ -25,8 +25,8 @@ def _grid(img, w: int, h: int) -> None:
         cv2.line(img, (0, h * i // 3), (w, h * i // 3), (34, 34, 38), 1)
 
 
-def run(settings: Settings) -> None:
-    with GazeTracker(settings) as tracker:
+def run(settings: Settings, make_tracker=None) -> None:
+    with (make_tracker or GazeTracker)(settings) as tracker:
         tracker.load()
         w, h = tracker.screen_w, tracker.screen_h
         print(f"[vivo] pantalla {tracker.screen.index} ({tracker.screen.name}) "

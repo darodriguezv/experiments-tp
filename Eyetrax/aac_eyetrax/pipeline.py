@@ -105,8 +105,10 @@ def run(
     run_accuracy: bool = True,
     acc_rows: int = 3,
     acc_cols: int = 3,
+    make_tracker=None,
 ) -> int:
     """Ejecuta el flujo completo. Devuelve un código de salida."""
+    _make = make_tracker or GazeTracker
     # Solo se numeran las pantallas que la persona realmente ve: los avisos
     # de calibración y de medición, más la pantalla final del tablero.
     total = int(not skip_calibration) + int(run_accuracy) + 1
@@ -119,7 +121,7 @@ def run(
 
     # Un solo tracker para las pantallas de aviso: crear el modelo de MediaPipe
     # cuesta cerca de un segundo, y los pasos internos ya arman el suyo.
-    with GazeTracker(settings) as shell:
+    with _make(settings) as shell:
         print(f"[flujo] pantalla {shell.screen.index} ({shell.screen.name}) "
               f"{shell.screen_w}x{shell.screen_h}, "
               f"captura {settings.capture_width}x{settings.capture_height}")
@@ -143,14 +145,14 @@ def run(
             print("[flujo] se salta la calibración (--skip-calibration)")
 
     if not skip_calibration:
-        if calibrate.run(settings, method) is None:
+        if calibrate.run(settings, method, make_tracker) is None:
             print("[flujo] la calibración no se completó - se detiene acá.")
             return 1
 
     # --------------------------------------------------------------- precisión
     stats = None
     if run_accuracy:
-        with GazeTracker(settings) as shell:
+        with _make(settings) as shell:
             shell.load()
             step += 1
             if not _step_screen(
@@ -161,16 +163,17 @@ def run(
             ):
                 print("[flujo] cancelado antes de medir.")
                 return 130
-        stats = accuracy.run(settings, acc_rows, acc_cols)
+        stats = accuracy.run(settings, acc_rows, acc_cols,
+                             make_tracker=make_tracker)
         if stats is None:
             print("[flujo] la medición se canceló; seguimos igual al tablero.")
 
     # ----------------------------------------------------------------- tablero
-    with GazeTracker(settings) as shell:
+    with _make(settings) as shell:
         shell.load()
         _final_screen(shell, stats, total, total)
 
-    aac_board.run(settings)
+    aac_board.run(settings, make_tracker)
 
     mins = (time.time() - t0) / 60.0
     print(f"[flujo] terminado en {mins:.1f} min")

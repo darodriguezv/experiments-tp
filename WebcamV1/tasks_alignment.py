@@ -168,6 +168,21 @@ class TasksFaceAlignment:
 
     # ------------------------------------------------------------ internals
 
+    def landmarks_normalised(self, image, timestamp) -> np.ndarray | None:
+        """Los 478 puntos en coordenadas normalizadas, o None.
+
+        Lo mismo que `_landmarks` pero público, porque la guía de colocación lo
+        necesita: `detect()` devuelve cajas y áreas, y tira los puntos crudos,
+        que es justo lo que hace falta para medir dónde está la cabeza.
+
+        Reusa la misma detección y el mismo orden de canales que la estimación
+        de mirada. Si midiera la pose con puntos de otra tubería, la guía
+        llevaría a la persona a una posición distinta de aquella en la que el
+        estimador fue calibrado - y esa guía es precisamente lo que existe para
+        evitar eso.
+        """
+        return self._landmarks(image, timestamp)
+
     def _landmarks(self, image, timestamp) -> np.ndarray | None:
         """Los puntos, alimentando **BGR sin convertir**, igual que el original.
 

@@ -143,8 +143,8 @@ def _draw_tile(img, tile: Tile, progress: float, hot: bool) -> None:
         )
 
 
-def run(settings: Settings) -> None:
-    with GazeTracker(settings) as tracker:
+def run(settings: Settings, make_tracker=None) -> None:
+    with (make_tracker or GazeTracker)(settings) as tracker:
         tracker.load()
         w, h = tracker.screen_w, tracker.screen_h
 

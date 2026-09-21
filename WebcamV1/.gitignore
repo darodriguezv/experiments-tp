@@ -14,3 +14,6 @@ __pycache__/
 
 # El log de GazeFollower, que Log.init() escribe en el camino normal.
 *.log
+models/
+logs/
+*.log
