@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# El modelo del usuario: contenido médico de una persona concreta.
+# Nunca al repositorio.
+*.user.json
+models/
