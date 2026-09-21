@@ -1,5 +1,6 @@
 """Predicción personalizada para el tablero CAA.
 
+    python main.py demo                  # el tablero clickeable, para probarlo
     python main.py smoke                 # chequeos del instrumento
     python main.py sim                   # ahorro sobre el usuario sintético
     python main.py sweep                 # barre casillas y vida media
@@ -63,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     p_logs.add_argument("--save", default=None,
                         help="guardar el modelo entrenado a este JSON")
 
+    p_demo = sub.add_parser(
+        "demo", help="el tablero clickeable con la franja de predicción")
+    p_demo.add_argument("--model", default="mio.user.json",
+                        help="dónde se guarda lo aprendido")
+    p_demo.add_argument("--slots", type=int, default=5)
+
     p_show = sub.add_parser("show", help="qué aprendió el modelo")
     p_show.add_argument("--model", required=True)
     p_show.add_argument("--limit", type=int, default=15)
@@ -125,6 +132,11 @@ def main(argv: list[str] | None = None) -> int:
             model.save(args.save)
             print(f"  modelo guardado -> {args.save}")
         return 0
+
+    if args.command == "demo":
+        from aac_prediccion import demo
+
+        return demo.run(model_path=args.model, slots=args.slots)
 
     if args.command == "show":
         model = UserModel.load(args.model)

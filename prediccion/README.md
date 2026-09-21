@@ -138,6 +138,26 @@ Dos decisiones sobre esa reconstrucción:
 Dado que este proyecto no prueba con pacientes, «datos reales» significa las
 sesiones del propio tesista usando el tablero.
 
+## Probarlo a mano
+
+```
+run.cmd demo
+```
+
+La franja de arriba son las predicciones, con el número verde de lo que ahorra
+cada una. El tablero de abajo no se mueve nunca. Arriba a la derecha hay dos
+contadores: lo que costó la frase en curso contra lo que costaría sin la franja,
+y el acumulado de la sesión.
+
+Arranca **sin proponer nada** y tiene que ser así: sin evidencia, una casilla
+solo cobra lectura. Después de decir dos o tres veces la misma frase empieza a
+aparecer. Lo aprendido se guarda en cada HABLAR, así que cerrar y reabrir lo
+conserva — y esa es la prueba que importa: la segunda vez tiene que costar menos.
+
+Para ver el efecto grande, decí algo que haya que deletrear (`ABC`, una palabra
+que el tablero no tenga, `ESPACIO`, `HABLAR`) y repetilo: pasa de unas diez
+permanencias a dos.
+
 ## Privacidad
 
 El modelo del usuario es un JSON con las frases de una persona concreta sobre su
@@ -147,7 +167,8 @@ cuerpo y su tratamiento. Nunca sale del equipo y nunca va al repositorio: el
 ## Uso
 
 ```
-python main.py smoke    # 11 chequeos del instrumento
+run.cmd demo            # el tablero clickeable, para probarlo a mano
+python main.py smoke    # 13 chequeos del instrumento
 python main.py sim      # ahorro sobre el usuario sintético
 python main.py sweep    # barre casillas y vida media
 python main.py logs ../RealsenseV1/logs --save mio.user.json
@@ -159,7 +180,8 @@ python main.py show --model mio.user.json
 - **El costo de una celda** en tiempo de búsqueda visual. Sin ese número, elegir
   cuántas casillas poner es una corazonada. Es medible con el arnés de
   `accuracy` que ya existe.
-- **Enchufarlo al tablero.** Hoy es un módulo de medición: no dibuja la franja.
+- **Llevarlo al tablero de verdad.** `demo` responde al clic; falta engancharlo
+  al lazo de permanencia por mirada de RealsenseV1/WebcamV1.
 - **Reordenar los candidatos del SLM** por lo que la persona eligió antes. Es la
   unión natural con [slm](../slm) y no está hecha.
 - **Deletreo asistido.** Predecir la palabra a mitad de deletrear es donde queda

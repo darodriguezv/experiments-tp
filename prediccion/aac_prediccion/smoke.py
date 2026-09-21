@@ -268,6 +268,56 @@ def _session_csv_round_trip() -> str:
             "final descartados")
 
 
+def _demo_renders_headless() -> str:
+    """El demo dibuja un cuadro y responde a un clic, sin abrir ventana.
+
+    No prueba que se vea bien - eso solo se ve mirándolo. Prueba lo que se
+    rompe solo: que la franja no tape el tablero, que las celdas entren en la
+    ventana, y que elegir una casilla descuente las permanencias que dice
+    descontar. Un demo que no arranca se nota; uno cuyo contador miente, no.
+    """
+    from aac_realsense import ui
+
+    from . import demo
+
+    model = UserModel()
+    for _ in range(4):
+        model.observe(["llama", "hermana"])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = demo.State(model, Path(tmp) / "t.user.json", slots=5)
+        img = ui.canvas(demo.WIDTH, demo.HEIGHT)
+        demo._draw_message(img, state)
+        zones = demo._draw_strip(img, state)
+        tiles = demo._draw_board(img, state)
+        demo._draw_status(img, state)
+
+        assert zones, "la franja quedó vacía con evidencia de sobra"
+        assert tiles, "el tablero no se dibujó"
+        top = min(t.y1 for t in tiles)
+        assert top >= demo.STRIP_TOP + demo.STRIP_H, \
+            f"el tablero ({top}) se solapa con la franja"
+        assert max(t.y2 for t in tiles) <= demo.HEIGHT, "celdas fuera de pantalla"
+
+        prop = zones[0][0]
+        state.dwells += 1
+        state.words.extend(prop.tokens)
+        # Sin voz: un chequeo que habla solo es un chequeo que nadie corre dos
+        # veces, y encima dice cosas médicas en voz alta sin avisar.
+        hablar = demo.tts.speak
+        demo.tts.speak = lambda *a, **k: None
+        try:
+            demo._speak(state)
+        finally:
+            demo.tts.speak = hablar
+        assert state.saved_now == prop.saving, \
+            f"la casilla prometió {prop.saving} y el contador dio {state.saved_now}"
+        assert state.model.utterances_seen == 5, "no aprendió al hablar"
+        assert state.path.exists(), "no guardó el modelo al hablar"
+    return (f"{len(zones)} casillas sobre {len(tiles)} celdas; "
+            f"la mejor ahorró {prop.saving} y el contador coincide")
+
+
 CHECKS = (
     ("el costo del tablero es correcto", _board_costs_are_right),
     ("sin evidencia no hay predicción", _no_prediction_without_evidence),
@@ -280,6 +330,7 @@ CHECKS = (
     ("el simulador no es el modelo", _simulator_is_not_the_model),
     ("la deriva se sobrevive", _drift_is_survivable),
     ("las sesiones reales se parsean bien", _session_csv_round_trip),
+    ("el demo dibuja y cuenta bien", _demo_renders_headless),
     ("el informe admite cuando no conviene", _report_is_honest_about_loss),
 )
 
