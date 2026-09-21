@@ -239,6 +239,110 @@ def _blink_heuristic() -> str:
     return f"abierto/cerrado/abierto con umbral {BLINK_RATIO:.0%} de la referencia"
 
 
+def _calibration_collects_and_fits() -> str:
+    """La recolección completa, con cámara y persona simuladas.
+
+    Es el camino que más caro sale descubrir roto: se descubriría con alguien
+    ya sentado, después de mirar nueve puntos, y habría que repetir todo. Acá
+    se recorre entero -bucle de puntos, descarte del asentamiento, armado de
+    las matrices, ajuste de la SVR- contra una cámara falsa y una mirada falsa
+    pero *consistente*: las features son función del objetivo que se está
+    mostrando, así que si el cableado está bien la SVR tiene que poder
+    ajustarlas.
+
+    Lo que NO prueba es que se vea bien ni que la mirada real sirva. Prueba que
+    nadie va a perder una sesión por un error de programación.
+    """
+    import contextlib
+    import tempfile
+
+    import cv2
+
+    from aac_eyetrax import video
+
+    from aac_webcam import calibration_ui
+    from aac_webcam.config import Settings
+
+    MUESTRAS = 4
+    objetivos = calibration_ui._grid(9)
+
+    class _Tracker:
+        def __init__(self, carpeta):
+            self.settings = Settings()
+            self.settings.samples_per_point = MUESTRAS
+            self.screen_w, self.screen_h = 1920, 1080
+            self.screen_cm, self.camera_cm = (34.4, 19.3), (17.2, -0.7)
+            self.pedidas = 0
+            import gf_compat
+
+            gf_compat.patch()
+            # `SVRCalibration.calibrate` loguea el error medio en el camino
+            # normal, así que sin logger inicializado revienta desde adentro de
+            # un método que por lo demás funcionaba. Es el mismo tropiezo que
+            # documenta `gf_compat.init_logging`.
+            # El log va FUERA de la carpeta temporal: el logger deja el archivo
+            # abierto y Windows no borra un directorio con archivos en uso.
+            gf_compat.init_logging(
+                str(Path(tempfile.gettempdir()) / "gf-smoke-cal.log"))
+            from gazefollower.calibration import SVRCalibration
+
+            self.calibration = SVRCalibration(model_save_path=carpeta)
+            self.rng = np.random.default_rng(0)
+
+        def open_window(self, window):
+            pass
+
+        def features(self, frame):
+            # Qué punto se está mostrando se deduce de cuántas muestras se
+            # pidieron: el bucle pide exactamente `MUESTRAS` por objetivo.
+            i = min(self.pedidas // MUESTRAS, len(objetivos) - 1)
+            self.pedidas += 1
+            nx, ny = objetivos[i]
+            cm = calibration_ui._target_cm(self, int(nx * self.screen_w),
+                                           int(ny * self.screen_h))
+            base = np.array([cm[0], cm[1], cm[0] * 0.5, cm[1] * 0.5,
+                             -cm[0], -cm[1]], dtype=np.float32)
+            return base + self.rng.normal(0, 0.05, 6).astype(np.float32)
+
+    class _Cap:
+        def read(self):
+            return True, np.zeros((720, 1280, 3), dtype=np.uint8)
+
+        def release(self):
+            pass
+
+    def _frames(cap):
+        while True:
+            yield np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    originales = (video.camera, video.iter_frames, cv2.imshow, cv2.waitKey,
+                  cv2.destroyWindow, calibration_ui.SETTLE_S,
+                  calibration_ui.FIRST_SETTLE_S)
+    with tempfile.TemporaryDirectory() as tmp:
+        tracker = _Tracker(tmp)
+        try:
+            video.camera = lambda *a, **k: contextlib.nullcontext(_Cap())
+            video.iter_frames = _frames
+            cv2.imshow = lambda *a, **k: None
+            cv2.waitKey = lambda *a, **k: -1
+            cv2.destroyWindow = lambda *a, **k: None
+            # Sin asentamiento: esperar 9 x 0.65 s de reloj real no mide nada.
+            calibration_ui.SETTLE_S = 0.0
+            calibration_ui.FIRST_SETTLE_S = 0.0
+            ok = calibration_ui.run(tracker, points=9)
+        finally:
+            (video.camera, video.iter_frames, cv2.imshow, cv2.waitKey,
+             cv2.destroyWindow, calibration_ui.SETTLE_S,
+             calibration_ui.FIRST_SETTLE_S) = originales
+
+    assert ok, "la calibración simulada no llegó a entrenar"
+    assert tracker.calibration.has_calibrated, "quedó sin marcar como calibrada"
+    assert tracker.pedidas == 9 * MUESTRAS, (
+        f"pidió {tracker.pedidas} muestras y esperaba {9 * MUESTRAS}: el bucle "
+        f"no está recolectando lo que dice")
+    return f"9 puntos x {MUESTRAS} muestras recolectados y la SVR ajustó"
+
+
 def _calibration_persists() -> str:
     """Entrenar, guardar, volver a cargar: sin cámara, con datos fabricados."""
     import tempfile
@@ -292,6 +396,7 @@ CHECKS = (
     ("nuestro tracker cumple la interfaz", _interface_parity),
     ("el alineador expone los puntos", _alignment_exposes_landmarks),
     ("el parpadeo se detecta y se suelta", _blink_heuristic),
+    ("la recolección de calibración funciona", _calibration_collects_and_fits),
     ("la calibración persiste", _calibration_persists),
 )
 
