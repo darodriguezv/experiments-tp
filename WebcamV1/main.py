@@ -44,9 +44,36 @@ def _pair(text: str) -> tuple[float, float]:
     return float(parts[0]), float(parts[1])
 
 
+class _Cancelled(Exception):
+    """La persona cerró el selector de pantalla."""
+
+
+def _resolve_monitor(spec: str) -> int | str:
+    """`--monitor ask` abre el selector visual; el resto pasa tal cual.
+
+    Por defecto se pregunta, y con dos pantallas eso no es un lujo: acá la
+    principal es el monitor externo y la webcam está en el portátil, así que
+    cualquier default fijo -«primary» incluido- acierta la mitad de las veces.
+    El selector pone un cartel en cada panel, así que se elige mirando cuál se
+    enciende y no adivinando un índice.
+    """
+    from aac_eyetrax import display
+
+    if str(spec).strip().lower() != "ask":
+        return spec
+    screen = display.pick_screen("¿En qué pantalla va a estar el tablero?")
+    if screen is None:
+        raise _Cancelled
+    print(f"[pantalla] {screen.label()}")
+    print(f"           (pasá --monitor {screen.index} para saltear el selector)")
+    return screen.index
+
+
 def _common(p) -> None:
     p.add_argument("--camera", type=int, default=0)
-    p.add_argument("--monitor", default="primary")
+    p.add_argument("--monitor", default="ask",
+                   help="índice de `main.py monitors`, primary, secondary, o "
+                        "ask para elegir en pantalla (por defecto)")
     p.add_argument("--smoother", default="kalman_ema")
     p.add_argument("--screen-cm", type=_pair, default=None,
                    help="ancho y alto visibles en cm, p.ej. '34.4 19.3'")
@@ -59,7 +86,7 @@ def _common(p) -> None:
 def _settings(args) -> Settings:
     s = Settings()
     s.camera_index = getattr(args, "camera", 0)
-    s.monitor = getattr(args, "monitor", "primary")
+    s.monitor = _resolve_monitor(getattr(args, "monitor", "ask"))
     s.smoother = getattr(args, "smoother", "kalman_ema")
     if getattr(args, "screen_cm", None):
         s.screen_cm = args.screen_cm
@@ -124,7 +151,28 @@ def main(argv: list[str] | None = None) -> int:
         print(display.describe_screens())
         return 0
 
-    settings = _settings(args)
+    if args.command == "geometry" and str(args.monitor).lower() == "ask":
+        # Sin elegir: se muestran todas, que es lo que uno quiere al comparar
+        # antes de decidir en cuál calibrar.
+        from aac_eyetrax import display
+
+        for screen in display.list_screens():
+            s = _settings(argparse.Namespace(**{**vars(args),
+                                                "monitor": screen.index}))
+            print(s.describe_geometry())
+            print(f"  calibración -> "
+                  f"{s.calibration_dir_for(screen).relative_to(s.calibration_dir.parents[1])}")
+            print()
+        print("Elegí con --monitor <índice>. La webcam tiene que estar sobre "
+              "la pantalla\nque elijas, o hay que medir --camera-cm respecto "
+              "de ella.")
+        return 0
+
+    try:
+        settings = _settings(args)
+    except _Cancelled:
+        print("[cancelado] no se eligió pantalla.")
+        return 130
 
     if args.command == "geometry":
         print("geometría física asumida:\n")

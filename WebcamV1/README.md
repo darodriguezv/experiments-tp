@@ -41,25 +41,44 @@ Detalle que sorprende: una vez calibrada, **la SVR predice solo desde el
 embedding** e ignora la mirada cruda. Por eso sin calibrar el cursor es
 inservible aunque el modelo cargue bien.
 
-## Hay que medir la pantalla con una regla
+## Dos pantallas, y solo una tiene webcam
 
-MGazeNet no predice píxeles sino **centímetros respecto de la cámara**. Para
-llegar a una celda hacen falta dos medidas que el software no puede adivinar:
+MGazeNet no predice píxeles sino **centímetros respecto de la cámara**, así que
+la geometría física es parte del cálculo — y con dos monitores significa cosas
+distintas según cuál se use.
 
-- **`--screen-cm`**: ancho y alto del área visible, en cm.
-- **`--camera-cm`**: dónde está la cámara desde la esquina superior izquierda
-  de esa área. La `y` es negativa si está por encima del borde, que es el caso
-  de casi todo portátil.
+**El tamaño se deriva solo.** El sistema reporta los milímetros de cada
+pantalla y `screeninfo` los expone, así que no hay que medir nada y cambiar de
+monitor lo recalcula:
 
 ```
-run.cmd geometry
+run.cmd geometry          # muestra TODAS las pantallas y qué asume en cada una
+run.cmd geometry --monitor 0
 ```
 
-imprime lo que está asumiendo. Si no coincide con la regla, el error es
-sistemático y **la calibración no lo arregla**: el modelo entrega cm
-verdaderos y las etiquetas estarían en cm escalados, así que el ajuste empeora
-en vez de fallar limpio. Los valores por defecto (34.4 × 19.3 cm, cámara en
-17.2 / −0.7) son los del portátil de desarrollo, no una constante.
+**La posición de la cámara no se puede derivar.** Nada le dice al sistema
+operativo dónde está físicamente una webcam respecto de un monitor. Por defecto
+se asume el borde superior centrado —correcto para la pantalla del portátil— y
+se avisa cuando la pantalla elegida parece un monitor externo:
+
+```
+! \.\DISPLAY5 mide 24" y probablemente sea un monitor externo. Si la webcam
+  es la del portátil, NO está sobre esta pantalla: medí dónde queda respecto
+  de su esquina superior izquierda y pasá --camera-cm.
+```
+
+Ese caso es real y no marginal: en esta máquina la pantalla **principal es el
+monitor externo de 24"** y la webcam está en el portátil, que es la secundaria.
+Cualquier default fijo —`primary` incluido— acierta la mitad de las veces, así
+que **`--monitor` pregunta por defecto** con el selector visual de Eyetrax: pone
+un cartel en cada panel y se elige mirando cuál se enciende.
+
+**Cada pantalla tiene su propia calibración**, en `models/gazefollower/<pantalla>/`.
+No es prolijidad: un modelo mapea a centímetros respecto de la cámara y esos
+centímetros se vuelven píxeles con el tamaño de *esa* pantalla. Con un solo
+directorio, cambiar de monitor cargaba en silencio el modelo de la otra. Ahora
+el caso malo es «no hay calibración para este monitor» en vez de «anda pero
+mal», que es mucho más difícil de diagnosticar.
 
 ## Dos bugs de GazeFollower que hubo que rodear
 
@@ -108,10 +127,10 @@ Si la precisión no mejora lo suficiente, este costo no se justifica.
 ## Uso
 
 ```
-run.cmd smoke        # 9 chequeos, sin cámara
-run.cmd geometry     # MIRALO ANTES DE CALIBRAR
-run.cmd pipeline     # colocar, calibrar, medir, tablero
-run.cmd calibrate --method 9point
+run.cmd smoke        # 10 chequeos, sin cámara
+run.cmd geometry     # todas las pantallas y qué asume en cada una
+run.cmd pipeline --monitor 0        # colocar, calibrar, medir, tablero
+run.cmd calibrate --monitor 0 --method 9point
 run.cmd live         # cursor, para ver si quedó bien
 run.cmd accuracy     # error en grados, comparable con Eyetrax
 run.cmd board --dwell 800

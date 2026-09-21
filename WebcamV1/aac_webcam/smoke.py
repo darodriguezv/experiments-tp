@@ -77,8 +77,9 @@ def _geometry_round_trip() -> str:
     from aac_webcam.config import Settings
 
     class _Fake:
-        settings = Settings()
         screen_w, screen_h = 1920, 1080
+        screen_cm = (34.4, 19.3)
+        camera_cm = (17.2, -0.7)
 
         def cm_to_px(self, x, y):
             from aac_webcam.tracker import WebcamTracker
@@ -100,9 +101,47 @@ def _geometry_round_trip() -> str:
     return f"round-trip exacto; centro de pantalla en {cm_centro[0]:+.1f}, {cm_centro[1]:+.1f} cm"
 
 
+def _each_screen_gets_its_own_geometry() -> str:
+    """Con dos pantallas, cada una tiene su tamaño y su calibración.
+
+    Es el chequeo que faltaba y el que importa en esta máquina: la pantalla
+    principal es el monitor externo y la webcam está en el portátil. Un modelo
+    calibrado en una no vale en la otra -mapea a centímetros respecto de la
+    cámara, y esos centímetros se vuelven píxeles con el tamaño de *esa*
+    pantalla- así que compartir directorio haría que cambiar de monitor cargara
+    en silencio el modelo equivocado.
+    """
+    from aac_eyetrax import display
+
+    from aac_webcam.config import Settings
+
+    screens = display.list_screens()
+    if len(screens) < 2:
+        return "una sola pantalla: nada que separar"
+
+    vistos, dirs = [], []
+    for screen in screens:
+        s = Settings()
+        s.monitor = screen.index
+        (w_cm, h_cm), (cam_x, _), avisos = s.geometry_for(screen)
+        vistos.append(round(w_cm, 1))
+        dirs.append(s.calibration_dir_for(screen))
+        # La cámara asumida se centra en la pantalla elegida, no en una fija.
+        assert abs(cam_x - w_cm / 2) < 1e-6, (cam_x, w_cm)
+
+    assert len(set(dirs)) == len(dirs), f"dos pantallas comparten calibración: {dirs}"
+    if len(set(vistos)) == 1:
+        return (f"{len(screens)} pantallas del mismo tamaño ({vistos[0]} cm); "
+                f"calibraciones igualmente separadas")
+    return (f"anchos {vistos} cm, cada uno con su calibración: "
+            f"{[d.name for d in dirs]}")
+
+
 def _settings_reject_nonsense() -> str:
     from aac_webcam.config import Settings
 
+    # Solo se validan los valores puestos A MANO: None significa "derivalo del
+    # monitor", que es el camino normal y no tiene nada que validar.
     malos = 0
     for campo, valor in (("screen_cm", (344.0, 193.0)),   # milimetros
                          ("screen_cm", (13.5, 7.6)),      # pulgadas: muy chico
@@ -247,6 +286,7 @@ CHECKS = (
     ("los dos stacks importan juntos", _both_stacks_import),
     ("cv2.ml.SVM existe", _svm_exists),
     ("la geometría cm<->px cierra", _geometry_round_trip),
+    ("cada pantalla tiene lo suyo", _each_screen_gets_its_own_geometry),
     ("la configuración rechaza absurdos", _settings_reject_nonsense),
     ("el arnés acepta nuestro tracker", _harness_accepts_our_factory),
     ("nuestro tracker cumple la interfaz", _interface_parity),

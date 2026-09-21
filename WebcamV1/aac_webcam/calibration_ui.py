@@ -142,7 +142,7 @@ def run(tracker, points: int = 9) -> bool:
     # El error de ajuste es sobre los mismos datos de entrenamiento, así que es
     # optimista por construcción. Se informa igual, pero nunca como "precisión":
     # eso lo mide `accuracy`, sobre puntos que el modelo no vio.
-    px = err_cm * tracker.screen_w / settings.screen_cm[0]
+    px = err_cm * tracker.screen_w / tracker.screen_cm[0]
     print(f"[calibración] {len(feats)} muestras, {X.shape[1]} rasgos")
     print(f"[calibración] error de AJUSTE {err_cm:.2f} cm (~{px:.0f} px). "
           f"Es sobre los datos de entrenamiento: optimista. El número real "
@@ -152,8 +152,8 @@ def run(tracker, points: int = 9) -> bool:
 
 def _target_cm(tracker, px_x: int, px_y: int) -> tuple[float, float]:
     """Píxel de pantalla -> cm respecto de la cámara. Inverso de `cm_to_px`."""
-    w_cm, h_cm = tracker.settings.screen_cm
-    cam_x, cam_y = tracker.settings.camera_cm
+    w_cm, h_cm = tracker.screen_cm
+    cam_x, cam_y = tracker.camera_cm
     cm_x = px_x * w_cm / tracker.screen_w - cam_x
     cm_y = -(px_y * h_cm / tracker.screen_h - cam_y)
     return cm_x, cm_y

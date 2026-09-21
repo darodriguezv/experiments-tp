@@ -76,6 +76,18 @@ class WebcamTracker:
         self.screen = display.resolve(self.settings.monitor)
         self.screen_w, self.screen_h = self.screen.size
 
+        # La geometría se resuelve UNA vez, contra la pantalla elegida, y se
+        # guarda en el tracker. Con dos monitores es lo único que evita que una
+        # parte del código use el tamaño de una pantalla y otra el de la otra.
+        self.screen_cm, self.camera_cm, avisos = self.settings.geometry_for(
+            self.screen)
+        for aviso in avisos:
+            print(f"[geometría] {aviso}")
+
+        # Y la calibración también es por pantalla: ver `calibration_dir_for`.
+        self.settings.calibration_dir = self.settings.calibration_dir_for(
+            self.screen)
+
         gf_compat.init_logging(str(ROOT / "logs" / "gazefollower.log"))
 
         from gazefollower.calibration import SVRCalibration
@@ -200,8 +212,8 @@ class WebcamTracker:
         de import. La `y` se invierte porque el sistema en cm crece hacia
         arriba y el de píxeles hacia abajo.
         """
-        w_cm, h_cm = self.settings.screen_cm
-        cam_x, cam_y = self.settings.camera_cm
+        w_cm, h_cm = self.screen_cm
+        cam_x, cam_y = self.camera_cm
         px_x = (cm_x + cam_x) * self.screen_w / w_cm
         px_y = (-cm_y + cam_y) * self.screen_h / h_cm
         return px_x, px_y
@@ -306,8 +318,8 @@ class WebcamTracker:
             "monitor_index": self.screen.index,
             "monitor_name": self.screen.name,
             "monitor_size": [self.screen_w, self.screen_h],
-            "screen_cm": list(self.settings.screen_cm),
-            "camera_cm": list(self.settings.camera_cm),
+            "screen_cm": list(self.screen_cm),
+            "camera_cm": list(self.camera_cm),
         }
         if self.reference_pose is not None:
             meta["reference_pose"] = self.reference_pose.as_dict()
@@ -345,9 +357,9 @@ class WebcamTracker:
                   f"y ahora corriendo en [{self.screen_w}, {self.screen_h}]. "
                   f"El error va a ser sistemático: recalibrá.")
         if meta.get("screen_cm") and list(meta["screen_cm"]) != list(
-                self.settings.screen_cm):
+                self.screen_cm):
             print(f"[warn] calibrado con la pantalla declarada como "
-                  f"{meta['screen_cm']} cm y ahora {list(self.settings.screen_cm)}. "
+                  f"{meta['screen_cm']} cm y ahora {list(self.screen_cm)}. "
                   f"La conversión cm->px cambió bajo los pies del modelo.")
 
     # ------------------------------------------------------------------ vida
