@@ -77,8 +77,15 @@ def foreign_nouns(telegraphic: str, candidate: str) -> list[str]:
     texto = normalise(candidate)
     intrusos = []
     for noun, forms in BOARD_NOUNS.items():
-        if noun in entrada:
-            continue                      # la entrada lo autoriza
+        # La entrada autoriza el sustantivo si menciona CUALQUIERA de sus
+        # formas, no solo la del tablero. Antes se miraba únicamente la clave, y
+        # eso descartaba expansiones correctas: para la entrada `NO HAMBRE`
+        # -deletreada, porque HAMBRE no está en el tablero- el candidato "no
+        # tengo hambre" se caía por "hablar de comida". Quedaba solo el literal,
+        # o sea que deletrear una palabra le quitaba a la persona las opciones
+        # que el módulo existe para darle.
+        if noun in entrada or any(_has_any(entrada, (f,)) for f in forms):
+            continue
         if any(_has_any(texto, (f,)) for f in forms):
             intrusos.append(noun)
     return intrusos

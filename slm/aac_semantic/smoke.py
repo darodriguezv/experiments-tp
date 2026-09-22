@@ -37,7 +37,12 @@ def _check(name: str, fn) -> bool:
 
 def _corpus_loads() -> str:
     corpus = runner.load_corpus()
-    assert len(corpus) >= 30, f"solo {len(corpus)} ítems"
+    # 120 y no 30: con 40 ítems una diferencia de 10 puntos entre dos
+    # configuraciones era indistinguible del ruido -harían falta ~193 para
+    # resolverla al 95 %- así que el arnés no podía guiar ninguna mejora. Si
+    # alguien reduce el corpus por debajo de esto, las comparaciones vuelven a
+    # ser adivinanza y conviene que falle antes de producir una tabla.
+    assert len(corpus) >= 120, f"solo {len(corpus)} ítems"
     tags = {t for item in corpus for t in item.get("tags", [])}
     ambiguous = [i for i in corpus if i.get("ambiguous")]
     urgent = [i for i in corpus if i.get("urgency") == "high"]
@@ -46,10 +51,10 @@ def _corpus_loads() -> str:
 
     # A corpus without hard cases measures nothing. These are the four classes
     # that decide whether the module is safe, so each must be represented.
-    assert len(ambiguous) >= 5, f"solo {len(ambiguous)} ítems ambiguos"
-    assert len(urgent) >= 6, f"solo {len(urgent)} urgentes"
+    assert len(ambiguous) >= 15, f"solo {len(ambiguous)} ítems ambiguos"
+    assert len(urgent) >= 25, f"solo {len(urgent)} urgentes"
     assert len(refusal) >= 3, f"solo {len(refusal)} que no deben expandirse"
-    assert len(traps) >= 15, f"solo {len(traps)} con trampas de invención"
+    assert len(traps) >= 90, f"solo {len(traps)} con trampas de invención"
     return (f"{len(corpus)} ítems, {len(tags)} etiquetas; {len(ambiguous)} "
             f"ambiguos, {len(urgent)} urgentes, {len(refusal)} sin expandir, "
             f"{len(traps)} con trampa")
@@ -653,6 +658,35 @@ def _gaze_board_is_wired() -> str:
             f"HABLAR vacío no llama al modelo")
 
 
+def _guard_accepts_spelled_synonyms() -> str:
+    """Deletrear un sinónimo no debe costarle las opciones a la persona.
+
+    El filtro autorizaba un sustantivo del tablero solo si la entrada usaba
+    **esa** palabra. Para `NO HAMBRE` -deletreada, porque HAMBRE no está en el
+    tablero- descartaba "no tengo hambre" por "hablar de comida", y la persona
+    quedaba con el literal nada más. O sea que deletrear le quitaba justo las
+    opciones que este módulo existe para darle.
+
+    Lo que el filtro sí tiene que seguir atrapando es el sustantivo ajeno de
+    verdad, que es su razón de ser: confundir baño con agua manda a alguien a
+    hacer lo incorrecto con total confianza.
+    """
+    from aac_semantic import guard
+
+    for entrada, candidato in (("NO HAMBRE", "no tengo hambre"),
+                               ("TENGO SED", "quiero tomar agua"),
+                               ("ME DUELE", "tengo dolor")):
+        assert not guard.foreign_nouns(entrada, candidato), (
+            f"{candidato!r} descartado para {entrada!r}, que lo autoriza")
+
+    for entrada, candidato in (("POR FAVOR BAÑO", "por favor, tome agua"),
+                               ("QUIERO AGUA", "quiero comida"),
+                               ("DOLOR", "quiero la medicina")):
+        assert guard.foreign_nouns(entrada, candidato), (
+            f"{candidato!r} pasó para {entrada!r}, que no lo dice")
+    return "sinónimos deletreados aceptados; sustantivos ajenos igual de vetados"
+
+
 CHECKS = (
     ("el corpus carga y valida", _corpus_loads),
     ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
@@ -660,6 +694,7 @@ CHECKS = (
     ("sin contaminación prompt/corpus", _no_prompt_corpus_contamination),
     ("el filtro garantiza la polaridad", _guard_guarantees_polarity),
     ("el filtro no descarta lo correcto", _guard_keeps_good_candidates),
+    ("el filtro acepta sinónimos deletreados", _guard_accepts_spelled_synonyms),
     ("dedupe atrapa la repetición", _dedupe_catches_repetition),
     ("detecta invención", _catches_invention),
     ("detecta polaridad volteada", _catches_polarity_flip),
