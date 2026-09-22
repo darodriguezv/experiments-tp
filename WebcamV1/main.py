@@ -252,8 +252,8 @@ def main(argv: list[str] | None = None) -> int:
         """
         metodo = getattr(args, "method", None) or "9point"
         print(f"[calibración] calibrando ({metodo}) antes de empezar "
-              f"(--skip-calibration para saltearla, --method 5point para "
-              f"abreviar)")
+              f"(obligatoria: no hay forma de saltearla; --method 5point "
+              f"para abreviar)")
         return calibrate.run(settings, metodo, make) is not None
 
     if args.command == "live":
