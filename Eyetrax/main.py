@@ -166,10 +166,17 @@ def _al_dia(settings, args) -> bool:
 
     **Diferencia con WebcamV1, que importa al comparar.** Allá las muestras de
     todas las sesiones se acumulan, así que cada calibración le agrega posturas
-    al modelo. Las rutinas del paquete `eyetrax` son dueñas de su bucle y no
-    dejan quedarse con las muestras, así que acá cada calibración REEMPLAZA a
-    la anterior y el modelo nunca conoce más de una postura por vez. Es una
-    limitación real de este camino, no una elección.
+    al modelo. Acá cada calibración REEMPLAZA a la anterior y el modelo nunca
+    conoce más de una postura por vez.
+
+    Eso es una diferencia del arnés, **no del estimador**, y es corregible: la
+    afirmación anterior de que «las rutinas de eyetrax son dueñas del bucle y
+    no dejan quedarse con las muestras» describía solo a sus rutinas de
+    calibración, que no hace falta usar. `GazeEstimator` expone
+    `extract_features(imagen)` y `train(X, y)`, que es exactamente lo que el
+    recolector de WebcamV1 necesita. Mientras no se haga, cualquier ventaja de
+    WebcamV1 medida tras varias sesiones incluye la acumulación y no solo el
+    modelo.
     """
     from aac_eyetrax import calibrate
 
