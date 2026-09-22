@@ -258,9 +258,122 @@ def _v6() -> Prompt:
     )
 
 
+_EXTRA_V7_ES = """Además, dos cosas más:
+
+10. Lo que la entrada nombra es PARA la persona que habla. AGUA es "quiero agua", nunca "tomá agua": eso sería darle una orden a quien la cuida en vez de pedirle algo. Usá el imperativo solo cuando la entrada pida una acción sobre el entorno -una puerta, una luz, una ventana-, nunca sobre el cuerpo o las necesidades de la persona.
+11. Devolvé siempre 3 opciones que digan cosas DISTINTAS, no la misma frase reescrita tres veces. Menos de 3 solo si la entrada está incompleta (regla 7).
+
+Un ejemplo más, del caso de la regla 10:
+
+entrada: MENOS DOLOR
+{"candidatos": ["quiero menos dolor", "el dolor bajó", "menos dolor"]}"""
+
+
+def _v7() -> Prompt:
+    """+ para quién es lo que se pide, y la exigencia de tres opciones.
+
+    Dos fallos vistos en uso real, no en el corpus:
+
+    * **Registro invertido.** "POR FAVOR BAÑO" salía como "por favor, use el
+      inodoro" y "POR FAVOR AGUA" como "por favor, tome agua": órdenes a quien
+      cuida en vez de pedidos de la persona. La regla 4 ya decía "primera
+      persona" y no alcanzaba, y hay una explicación plausible: el ejemplo de
+      LUZ enseña imperativos dirigidos a otro ("prendé la luz"), que ahí son
+      correctos porque se trata del entorno. El modelo generaliza ese
+      imperativo a las necesidades del cuerpo, donde invierte quién pide y
+      quién recibe. La regla 10 marca esa frontera en vez de prohibir el
+      imperativo, que perdería el caso de la luz.
+
+    * **Una sola opción.** "ME SIENTO MAL" devolvía un único candidato. Sin
+      elección el módulo no aporta nada: el tablero pelado ya podía decir eso.
+      La regla 11 pide tres distintas y ata el caso de una sola a la entrada
+      incompleta, que es el único donde corresponde.
+
+    El ejemplo es MENOS DOLOR y muestra tres cosas a la vez: primera persona,
+    lecturas realmente distintas -un pedido y un reporte, no dos formas de
+    decir lo mismo- y cero invención. La primera versión de este ejemplo usaba
+    "es hora de mi medicación", que **inventa un horario y un posesivo**: un
+    ejemplo que viola la regla 1 mientras pretende reforzar la 10. La medición
+    lo detectó -la invención subió de 2 % a 5 %- antes de que llegara a nadie.
+
+    Todo se **agrega al final** del prompt de v6 en vez de intercalarse, y eso
+    no es comodidad: la escalera de variantes existe para poder atribuir cada
+    cambio de métrica a un agregado concreto, y eso solo vale si cada prompt
+    contiene literalmente al anterior. Intercalar las reglas donde "quedaban
+    mejor" rompía esa propiedad, y `smoke.py` lo detectó.
+
+    **Medido, y NO mejora.** Con filtro, contra v6 sobre qwen2.5:3b: recall
+    85 % contra 88 %, seguridad 95 % contra 100 %, invención 2 % contra 0 %. Sin
+    filtro la invención sube de 2 % a 8 %.
+
+    El resultado es consistente con lo que la ablación original ya había
+    medido: agregar reglas en prosa **baja** el recall 15 puntos mientras
+    agregar ejemplos lo sube 31. Los modelos chicos no absorben más
+    instrucciones; se ahogan. Se conserva la variante porque un resultado
+    negativo medido vale más que la intuición que lo motivó.
+    """
+    base = _v6()
+    return Prompt(
+        variant="v7-registro",
+        adds="para quién se pide + exigir 3 opciones distintas",
+        system=base.system + chr(10) * 2 + _EXTRA_V7_ES,
+        json_mode=True,
+    )
+
+
+_EXTRA_V8_ES = """Dos ejemplos más:
+
+entrada: MENOS DOLOR
+{"candidatos": ["quiero menos dolor", "el dolor bajó", "menos dolor"]}
+
+entrada: POR FAVOR MEDICINA
+{"candidatos": ["por favor, quiero la medicina", "por favor, necesito la medicina", "por favor, medicina"]}"""
+
+
+def _v8() -> Prompt:
+    """+ dos ejemplos más, y NINGUNA regla nueva.
+
+    Es la intervención que la evidencia del propio módulo respalda. La ablación
+    original ya había medido que agregar reglas en prosa **baja** el recall 15
+    puntos mientras agregar ejemplos lo sube 31, y v7 lo confirmó por las malas:
+    sus dos reglas nuevas dejaron el recall en 85 % contra 88 % y subieron la
+    invención de 2 % a 8 %.
+
+    Así que acá se enseñan las mismas dos cosas **mostrándolas**:
+
+    * `MENOS DOLOR` cubre el registro y la diversidad a la vez: primera persona,
+      y dos lecturas realmente distintas -un pedido y un reporte- en vez de la
+      misma frase escrita de tres formas.
+    * `POR FAVOR MEDICINA` es el contraejemplo directo del fallo visto en uso
+      real, donde "POR FAVOR AGUA" salía como "por favor, tome agua": una orden
+      a quien cuida en lugar de un pedido de la persona.
+
+    Ninguno de los dos inventa nada, que es donde v7 se tropezó: su ejemplo
+    decía "es hora de mi medicación" e inventaba un horario y un posesivo
+    mientras pretendía reforzar la regla de no inventar.
+
+    **Medido, y tampoco mejora.** Con filtro, contra v6 sobre qwen2.5:3b:
+    empata en recall (88 %), seguridad (100 %) e invención (0 %), pero baja la
+    diversidad de 0.56 a 0.45 y las opciones de 3.1 a 2.9. O sea que empeora
+    justo donde más duele: menos opciones distintas es exactamente la queja que
+    motivó todo esto.
+
+    Se conserva como resultado negativo. Dos intentos bien motivados -uno por
+    reglas, otro por ejemplos- y ninguno le gana a v6, que sigue siendo la
+    única configuración que pasa todas las puertas.
+    """
+    base = _v6()
+    return Prompt(
+        variant="v8-ejemplos",
+        adds="2 ejemplos más (registro y diversidad), sin reglas nuevas",
+        system=base.system + chr(10) * 2 + _EXTRA_V8_ES,
+        json_mode=True,
+    )
+
+
 VARIANTS: dict[str, Prompt] = {
     p.variant: p for p in (_v0(), _v1(), _v2(), _v3(), _v4(), _v5(),
-                           _v6())
+                           _v6(), _v7(), _v8())
 }
 
 

@@ -60,8 +60,19 @@ class Settings:
     ema_alpha: float = 0.25
 
     # --- AAC dwell selection ---
-    dwell_ms: int = 800
-    """How long the gaze must rest on a tile before it fires."""
+    dwell_ms: int = 1200
+    """Cuánto hay que sostener la mirada antes de que la celda dispare.
+
+    Era 800 ms y se quedaba corto en uso real: se disparaban celdas al pasar,
+    sobre todo letras, que son 30 celdas chicas en vez de 25 grandes. Y un
+    carácter equivocado no cuesta una permanencia sino tres -notarlo, BORRAR, y
+    volver a acertar-, así que el umbral bajo sale más caro de lo que ahorra.
+
+    1200 ms es un punto de partida ajustable con `--dwell`, no un óptimo: el
+    valor correcto depende de la persona, y para alguien con ELA avanzada
+    probablemente haya que subirlo más. Lo que sí es general es la asimetría:
+    esperar de más cuesta una fracción de segundo y equivocarse cuesta tres
+    selecciones."""
 
     refractory_ms: int = 600
     """Dead time after a selection, so one long look cannot double-fire."""

@@ -1,0 +1,7 @@
+t_since_start_s,event,label,gaze_x,gaze_y
+3.574,select,ME SIENTO,962,443
+5.010,select,NO,346,459
+7.222,select,MAL,1209,844
+8.848,select,TAL VEZ,1753,908
+10.314,select,HABLAR,1706,1000
+13.416,select,DICHO:no me siento mal,1009,101

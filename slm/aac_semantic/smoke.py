@@ -398,24 +398,46 @@ def _parses_every_shape() -> str:
 
 
 def _prompt_variants_are_nested() -> str:
-    """Each variant must add exactly one thing to the previous one.
+    """Cada variante agrega exactamente una cosa a *alguna* anterior.
 
-    That nesting is what makes the ablation table interpretable. If a variant
-    quietly rewrote an earlier instruction, the difference between two rows
-    would no longer be attributable to the one addition its docstring claims.
+    Ese anidamiento es lo que hace interpretable la tabla de ablación: si una
+    variante reescribiera en silencio una instrucción previa, la diferencia
+    entre dos filas dejaría de ser atribuible al único agregado que su docstring
+    declara.
+
+    **Se admiten ramas, no solo una escalera.** Antes se exigía que cada
+    variante extendiera a la inmediatamente anterior, y eso prohibía dos
+    intentos distintos sobre el mismo padre - que es exactamente lo que hacen
+    v7 y v8: dos formas de arreglar el mismo fallo, una con reglas y otra con
+    ejemplos, las dos sobre v6. Compararlas entre sí es la comparación que
+    importa, y la escalera lineal la hacía imposible de expresar.
+
+    Lo que sí se sigue exigiendo: que cada variante contenga literalmente a su
+    padre. Sin eso no hay atribución posible, con ramas o sin ellas.
     """
     order = list(prompts.VARIANTS.values())
     assert len(order) >= 5
-    for prev, cur in zip(order, order[1:]):
-        assert len(cur.system) >= len(prev.system) - 40, (
-            f"{cur.variant} no es una extensión de {prev.variant}")
-        assert cur.adds and cur.adds != prev.adds
+    padres = {}
+    for i, cur in enumerate(order[1:], start=1):
+        previos = order[:i]
+        padre = next((p for p in reversed(previos)
+                      if p.system in cur.system), None)
+        if padre is None:
+            # Las primeras variantes reescriben el encabezado en vez de
+            # anidarse textualmente; ahí alcanza con que no encojan.
+            assert len(cur.system) >= len(order[i - 1].system) - 40, (
+                f"{cur.variant} no extiende a ninguna variante anterior")
+        else:
+            padres[cur.variant] = padre.variant
+        assert cur.adds and cur.adds != order[i - 1].adds
     assert not order[0].json_mode, "la variante base no debe pedir JSON"
     assert order[-1].json_mode, "la última variante debe pedir JSON"
     for p in order:
         assert "entrada:" in p.user("AGUA")
         assert "AGUA" in p.user("AGUA")
-    return f"{len(order)} variantes anidadas, cada una con un agregado nombrado"
+    ramas = ", ".join(f"{h}<-{padre}" for h, padre in padres.items())
+    return (f"{len(order)} variantes, cada una con un agregado nombrado"
+            + (f"; anidadas: {ramas}" if ramas else ""))
 
 
 # --------------------------------------------------------------- end to end

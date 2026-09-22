@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_board = sub.add_parser("board", help="tablero por permanencia")
     _common(p_board)
-    p_board.add_argument("--dwell", type=int, default=800)
+    p_board.add_argument("--dwell", type=int, default=1200)
     p_board.add_argument("--stick", type=float, default=None,
                          help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
     p_board.add_argument("--fixation-ms", type=int, default=None,
@@ -162,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=("5point", "9point", "13point"))
     p_pipe.add_argument("--fresh", action="store_true",
                         help="descartar las calibraciones anteriores")
-    p_pipe.add_argument("--dwell", type=int, default=800)
+    p_pipe.add_argument("--dwell", type=int, default=1200)
     p_pipe.add_argument("--stick", type=float, default=None,
                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
     p_pipe.add_argument("--fixation-ms", type=int, default=None,

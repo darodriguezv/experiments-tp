@@ -219,8 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         help="patrón de calibración (por defecto 9point)",
     )
     p_pipe.add_argument(
-        "--dwell", type=int, default=800,
-        help="tiempo de permanencia en ms (por defecto 800)",
+        "--dwell", type=int, default=1200,
+        help="tiempo de permanencia en ms (por defecto 1200; subilo si se disparan celdas al pasar)",
     )
     p_pipe.add_argument("--stick", type=float, default=None,
                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
@@ -241,8 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     p_board = sub.add_parser("board", help="tablero CAA por permanencia")
     _add_common(p_board)
     p_board.add_argument(
-        "--dwell", type=int, default=800,
-        help="tiempo de permanencia en ms (por defecto 800)"
+        "--dwell", type=int, default=1200,
+        help="tiempo de permanencia en ms (por defecto 1200; subilo si se disparan celdas al pasar)"
     )
     p_board.add_argument("--stick", type=float, default=None,
                          help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")

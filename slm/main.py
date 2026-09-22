@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     p_gaze.add_argument("--variant", default=None, choices=list(prompts.VARIANTS))
     p_gaze.add_argument("--camera", type=int, default=0)
     p_gaze.add_argument("--monitor", default="ask")
-    p_gaze.add_argument("--dwell", type=int, default=800)
+    p_gaze.add_argument("--dwell", type=int, default=1200)
     p_gaze.add_argument("--stick", type=float, default=None)
     p_gaze.add_argument("--fixation-ms", type=int, default=None)
     p_gaze.add_argument("--no-speech", action="store_true")
