@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-08-25 14:03:37",
+  "saved_at": "2026-09-22 10:03:05",
   "model_name": "ridge",
   "camera_index": 0,
   "capture_size": [
@@ -13,15 +13,15 @@
     1080
   ],
   "monitor_origin": [
-    0,
-    0
+    1920,
+    301
   ],
   "reference_pose": {
-    "cx": 0.4818,
-    "cy": 0.4353,
-    "eye_span": 0.1592,
-    "roll_deg": -0.09,
-    "yaw_ratio": 0.0583,
-    "pitch_ratio": 0.3119
+    "cx": 0.5105,
+    "cy": 0.5013,
+    "eye_span": 0.15,
+    "roll_deg": -0.17,
+    "yaw_ratio": 0.0082,
+    "pitch_ratio": 0.3744
   }
 }
