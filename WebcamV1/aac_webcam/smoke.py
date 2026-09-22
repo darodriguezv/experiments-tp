@@ -343,6 +343,59 @@ def _calibration_collects_and_fits() -> str:
     return f"9 puntos x {MUESTRAS} muestras recolectados y la SVR ajustó"
 
 
+def _calibration_accumulates() -> str:
+    """Recalibrar tiene que SUMAR, no reemplazar.
+
+    Es la respuesta a un problema concreto: uno se mueve, la calibración deja
+    de servir, se recalibra... y reemplazando, el modelo vuelve a conocer una
+    sola postura. Al minuto siguiente pasa lo mismo. Acumulando, cada sesión
+    agrega posturas y moverse entre sesiones es lo que lo vuelve tolerante.
+
+    Se comprueba además el tope: sin él, meses de sesiones de otra silla y otra
+    altura de pantalla seguirían pesando sobre el ajuste de hoy.
+    """
+    import tempfile
+
+    from aac_webcam import calibration_ui
+    from aac_webcam.config import Settings
+
+    class _T:
+        def __init__(self, d):
+            self.settings = Settings()
+            self.settings.calibration_dir = Path(d)
+
+    rng = np.random.default_rng(1)
+
+    def sesion(t, n=20, fresh=False):
+        X = rng.normal(size=(n, 8)).astype(np.float32)
+        y = rng.normal(size=(n, 2)).astype(np.float32)
+        poses = rng.normal(size=(n, 6)).astype(np.float32)
+        return calibration_ui._accumulate(t, X, y, poses, fresh=fresh)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = _T(tmp)
+        X1, _, s1 = sesion(t)
+        X2, _, s2 = sesion(t)
+        X3, _, s3 = sesion(t)
+        assert (len(X1), s1) == (20, 1), (len(X1), s1)
+        assert (len(X2), s2) == (40, 2), f"la segunda no acumuló: {len(X2)}, {s2}"
+        assert (len(X3), s3) == (60, 3), (len(X3), s3)
+
+        # --fresh tira todo y vuelve a empezar.
+        X4, _, s4 = sesion(t, fresh=True)
+        assert (len(X4), s4) == (20, 1), f"--fresh no descartó: {len(X4)}, {s4}"
+
+        # El tope: mas sesiones que MAX_SESSIONS no siguen creciendo.
+        for _ in range(calibration_ui.MAX_SESSIONS + 3):
+            Xn, _, sn = sesion(t)
+        assert sn <= calibration_ui.MAX_SESSIONS, (
+            f"{sn} sesiones retenidas y el tope es "
+            f"{calibration_ui.MAX_SESSIONS}")
+        assert len(Xn) <= 20 * calibration_ui.MAX_SESSIONS, len(Xn)
+    return (f"1 -> 2 -> 3 sesiones acumulan 20/40/60 muestras; --fresh "
+            f"reinicia; tope {calibration_ui.MAX_SESSIONS} respetado")
+
+
 def _calibration_persists() -> str:
     """Entrenar, guardar, volver a cargar: sin cámara, con datos fabricados."""
     import tempfile
@@ -397,6 +450,7 @@ CHECKS = (
     ("el alineador expone los puntos", _alignment_exposes_landmarks),
     ("el parpadeo se detecta y se suelta", _blink_heuristic),
     ("la recolección de calibración funciona", _calibration_collects_and_fits),
+    ("recalibrar acumula en vez de reemplazar", _calibration_accumulates),
     ("la calibración persiste", _calibration_persists),
 )
 

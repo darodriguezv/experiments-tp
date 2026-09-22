@@ -94,6 +94,8 @@ def _settings(args) -> Settings:
         s.camera_cm = args.camera_cm
     if getattr(args, "no_position_check", False):
         s.check_position = False
+    if getattr(args, "fresh", False):
+        s.calibration_fresh = True
     if getattr(args, "dwell", None):
         s.dwell_ms = args.dwell
     if getattr(args, "stick", None) is not None:
@@ -119,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     _common(p_cal)
     p_cal.add_argument("--method", default="9point",
                        choices=("5point", "9point", "13point"))
+    p_cal.add_argument("--fresh", action="store_true",
+                       help="descartar las calibraciones anteriores. Por "
+                            "defecto se acumulan, que es lo que hace al modelo "
+                            "tolerar que uno se mueva")
 
     p_live = sub.add_parser("live", help="cursor de mirada en vivo")
     _common(p_live)
@@ -142,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     _common(p_pipe)
     p_pipe.add_argument("--method", default="9point",
                         choices=("5point", "9point", "13point"))
+    p_pipe.add_argument("--fresh", action="store_true",
+                        help="descartar las calibraciones anteriores")
     p_pipe.add_argument("--dwell", type=int, default=800)
     p_pipe.add_argument("--stick", type=float, default=None,
                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")

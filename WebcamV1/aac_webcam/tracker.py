@@ -105,6 +105,8 @@ class WebcamTracker:
 
         self._last_ts = 0
         self._openness_ref = 0.0
+        self.last_pose: FacePose | None = None
+        self.last_eye_px: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------ setup
 
@@ -235,8 +237,50 @@ class WebcamTracker:
             return False
         return openness < BLINK_RATIO * self._openness_ref
 
+    def _remember_pose(self, frame, face_info) -> None:
+        """Guarda la pose de la cabeza del cuadro actual, sin costo extra.
+
+        Reusa los puntos que el alineador ya calculó. Una segunda pasada de
+        MediaPipe costaría otros ~33 ms, o sea bajar de 14 a 10 fps solo para
+        saber dónde está la cabeza - y hay que saberlo, porque la precisión de
+        un estimador basado en apariencia depende fuerte de la postura, y hoy
+        alejarse o ladearse degrada todo **sin que nada lo avise**.
+        """
+        pts = getattr(self.alignment, "last_landmarks", None)
+        if pts is None:
+            self.last_pose = None
+            return
+        h, w = frame.shape[:2]
+        self.last_pose = pose_from_landmarks(pts, w, h)
+        rect = getattr(face_info, "left_rect", None)
+        self.last_eye_px = (int(rect[2]), int(rect[3])) if rect else None
+
+    def pose_drift(self):
+        """Cuánto se corrió la cabeza respecto de la calibración.
+
+        Devuelve (etiqueta, grave) o None si no hay con qué comparar. Es lo que
+        convierte «a veces anda mal» en «te alejaste», que es accionable.
+        """
+        ref, now = self.reference_pose, getattr(self, "last_pose", None)
+        if ref is None or now is None:
+            return None
+        d_span = now.eye_span - ref.eye_span
+        d_cx = now.cx - ref.cx
+        d_cy = now.cy - ref.cy
+        # El tamaño de los ojos es lo que más pesa: manda cuántos píxeles
+        # reales recibe la CNN, y encima cambia con la distancia, que es lo que
+        # uno varía sin darse cuenta.
+        if abs(d_span) > 0.020:
+            return ("ALEJADO" if d_span < 0 else "DEMASIADO CERCA"), True
+        if max(abs(d_cx), abs(d_cy)) > 0.045:
+            return "CORRIDO DE LA POSICIÓN DE CALIBRACIÓN", True
+        if abs(d_span) > 0.012 or max(abs(d_cx), abs(d_cy)) > 0.028:
+            return "algo fuera de la posición de calibración", False
+        return "posición OK", False
+
     def process(self, frame) -> GazeSample:
         face_info = self._face_info(frame)
+        self._remember_pose(frame, face_info)
         if not getattr(face_info, "status", False):
             return GazeSample(ok=False, face=False, blink=False)
         if not getattr(face_info, "can_gaze_estimation", False):
@@ -296,7 +340,8 @@ class WebcamTracker:
         points = {"9point": 9, "5point": 5, "13point": 13}.get(method)
         if points is None:
             raise ValueError("method debe ser 9point, 5point o 13point")
-        self.trained = calibration_ui.run(self, points)
+        self.trained = calibration_ui.run(
+            self, points, fresh=self.settings.calibration_fresh)
 
     # -------------------------------------------------------- persistencia
 

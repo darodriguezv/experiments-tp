@@ -93,6 +93,12 @@ def run(settings: Settings, make_tracker=None) -> None:
                     fps = 10.0 / max(now - t0, 1e-6)
                     t0 = now
 
+                # Deriva de cabeza: solo los trackers que la calculan gratis
+                # la exponen (WebcamV1 reusa los puntos que ya detecto). Sin
+                # esto, alejarse o ladearse degrada todo en silencio, que es
+                # exactamente lo que hace pensar que el estimador no sirve.
+                deriva = getattr(tracker, "pose_drift", None)
+                deriva = deriva() if deriva else None
                 if temblores:
                     tj = float(np.median(temblores))
                     linea_temblor = (f"temblor {tj:4.0f} px = "
@@ -106,6 +112,13 @@ def run(settings: Settings, make_tracker=None) -> None:
                     f"crudo=({sample.raw_x:5d},{sample.raw_y:5d})",
                     "ESC/Q salir   R punto crudo",
                 ])
+                if deriva is not None:
+                    etiqueta, grave = deriva
+                    if grave:
+                        ui.banner(img, etiqueta, ui.WARN)
+                    elif etiqueta != "posición OK":
+                        ui.text_center(img, etiqueta, w // 2, int(h * 0.06), 24,
+                                       ui.ACCENT)
                 if settings.show_camera:
                     ui.camera_inset(img, frame)
 

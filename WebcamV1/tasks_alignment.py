@@ -111,6 +111,12 @@ class TasksFaceAlignment:
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._last_ts = 0
+        self.last_landmarks = None
+        """Los puntos normalizados del ultimo `detect`, para que la pose de la
+        cabeza salga GRATIS. Calcularla con una segunda pasada de MediaPipe
+        costaria otros 33 ms por cuadro, o sea bajar de 14 a 10 fps solo para
+        saber donde esta la cabeza - y la cabeza hay que vigilarla justamente
+        porque la precision depende de ella."""
 
     # ------------------------------------------------------------------ API
 
@@ -124,6 +130,7 @@ class TasksFaceAlignment:
         info.img_w, info.img_h = w, h
 
         pts = self._landmarks(image, timestamp)
+        self.last_landmarks = pts
         if pts is None:
             info.status = False
             info.can_gaze_estimation = False

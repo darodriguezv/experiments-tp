@@ -98,6 +98,16 @@ class Settings(EyetraxSettings):
     cuadro, y medir los dos juntos daba mucho peor que medir cada uno aparte.
     """
 
+    calibration_fresh: bool = False
+    """True = descartar las calibraciones anteriores y empezar de cero.
+
+    Por defecto se ACUMULA. Recalibrar reemplazando era justamente lo que hacía
+    inútil recalibrar: se cambiaba una postura por otra y el modelo seguía
+    conociendo una sola. Acumulando, moverse entre sesiones es lo que lo vuelve
+    robusto. Se empieza de cero cuando cambia algo físico -otra silla, otra
+    altura de pantalla, otra cámara- y los datos viejos ya no describen la
+    misma situación."""
+
     calibration_points: int = 9
     samples_per_point: int = 18
     """Cuadros que se promedian por punto. A ~30 fps son unos 0.6 s de mirada

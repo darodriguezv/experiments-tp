@@ -246,6 +246,14 @@ def run(settings: Settings, make_tracker=None) -> None:
                     is_hot = hovered is not None and t.tile_id == hovered.tile_id
                     _draw_tile(img, t, progress if is_hot else 0.0, is_hot)
 
+                deriva = getattr(tracker, "pose_drift", None)
+                deriva = deriva() if deriva else None
+                if deriva is not None and deriva[1]:
+                    # Grave: se avisa sin interrumpir. Interrumpir el tablero
+                    # le quitaria la voz a la persona justo cuando la necesita.
+                    ui.text_center(img, deriva[0], w // 2, int(h * 0.035), 26,
+                                   ui.WARN, bold=True)
+
                 if sample.ok:
                     # El cursor grande va en el punto ESTABILIZADO, que es el
                     # que decide la selección. Dibujarlo en el punto por cuadro
