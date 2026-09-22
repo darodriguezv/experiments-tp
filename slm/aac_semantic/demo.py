@@ -50,8 +50,12 @@ WIDTH, HEIGHT = 1280, 800
 # El 3B primero: es el que mejor mide (88 % de recall contra 70 % del 1.5B) y
 # tarda 0.34 s, así que no hay razón para arrancar en uno peor. El 1.5B era el
 # default y contestaba "POR FAVOR COMIDA" con un solo "comida".
-MODELS = ["qwen2.5:3b", "qwen2.5:1.5b", "llama3.2:3b", "phi3.5", "gemma2:2b",
-          "qwen2.5:0.5b", "llama3.2:1b", "smollm2:1.7b"]
+MODELS = ["qwen2.5:3b", "qwen2.5:7b", "qwen2.5:1.5b", "llama3.2:3b",
+          "phi3.5", "gemma2:2b", "qwen2.5:0.5b", "llama3.2:1b", "smollm2:1.7b"]
+"""El 3b va primero porque es el que mide mejor, no por ser el mas chico: el 7b
+empata en recall y DEVUELVE MENOS OPCIONES (2.39 contra 3.00), que es
+justamente lo que se necesita. Esta en la lista para poder compararlos en vivo
+con la tecla M."""
 
 DEFAULT_VARIANT = "v6-glosario"
 """La única configuración que pasa todas las puertas de `metrics.usable`, junto
@@ -120,7 +124,11 @@ def _expand(state: State) -> None:
     """
     telegraphic = state.telegraphic
     variant = state.variant
-    backend = backends.OllamaBackend(state.model, temperature=0.2)
+    # keep_alive="-1": el modelo se queda en RAM mientras el tablero este
+    # abierto. Con el default de 5 minutos de Ollama, una pausa hace que la
+    # frase siguiente pague 39 s de recarga - y puede ser la urgente.
+    backend = backends.OllamaBackend(state.model, temperature=0.2,
+                                     keep_alive="-1")
 
     completion = backend.complete(variant.system, variant.user(telegraphic),
                                   json_mode=variant.json_mode)

@@ -177,13 +177,20 @@ class OllamaBackend(Backend):
 
     def __init__(self, model: str, url: str = OLLAMA_URL,
                  temperature: float = 0.2, timeout_s: float = 180.0,
-                 seed: int = 7):
+                 seed: int = 7, keep_alive: str = "30m"):
         self.model = model
         self.name = model
         self.url = url.rstrip("/")
         self.temperature = temperature
         self.timeout_s = timeout_s
         self.seed = seed
+        self.keep_alive = keep_alive
+        """Cuánto sigue el modelo en RAM tras la última petición.
+
+        Ollama usa 5 minutos por defecto y eso es demasiado poco para hablar:
+        cargar qwen2.5:3b cuesta 39 s medidos, así que una pausa de más de
+        cinco minutos hace que la frase siguiente tarde medio minuto. Para el
+        tablero conviene `-1`, que lo deja cargado mientras Ollama viva."""
 
     # ------------------------------------------------------------- discovery
 

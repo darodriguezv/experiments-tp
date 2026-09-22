@@ -359,7 +359,8 @@ def _warm_up(state) -> None:
 
     try:
         t0 = time.time()
-        backend = backends.OllamaBackend(state.model, temperature=0.2)
+        backend = backends.OllamaBackend(state.model, temperature=0.2,
+                                         keep_alive="-1")
         variant = state.variant
         backend.complete(variant.system, variant.user("agua"),
                          json_mode=variant.json_mode)
