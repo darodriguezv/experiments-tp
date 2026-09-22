@@ -131,7 +131,7 @@ def _draw_candidates(img, state, zones, w: int, h: int, progress: float,
     ui.text_center(img, "¿CUÁL QUISO DECIR?", w // 2, int(h * 0.09), 52,
                    ui.TEXT, bold=True)
     ui.text_center(img, f"{modelo}   {latencia:.2f}s   "
-                        f"mire una opción para decirla",
+                        f"T={state.temperature}   mire una opción para decirla",
                    w // 2, int(h * 0.145), 26, ui.TEXT_DIM)
 
     for kind, texto, (x1, y1, x2, y2) in zones:
@@ -157,14 +157,15 @@ def _draw_candidates(img, state, zones, w: int, h: int, progress: float,
 
 
 def run(settings: Settings, model: str | None = None,
-        variant: str | None = None) -> int:
+        variant: str | None = None, temperature: float = 0.2,
+        seed: int | None = 7) -> int:
     """Abre el tablero. Calibra primero, siempre."""
     probe = backends_probe()
     if probe:
         print(probe)
         return 1
 
-    state = demo.State()
+    state = demo.State(temperature=temperature, seed=seed)
     if model:
         if model not in demo.MODELS:
             print(f"{model} no está en la lista: {', '.join(demo.MODELS)}")
@@ -173,7 +174,10 @@ def run(settings: Settings, model: str | None = None,
     if variant:
         state.variant_name = variant
 
-    print(f"[tablero] {state.model} / {state.variant.variant}")
+    print(f"[tablero] {state.model} / {state.variant.variant} / "
+          f"T={state.temperature}"
+          + ("" if state.seed is None else f" (semilla {state.seed} FIJA: la "
+                                           f"temperatura no va a tener efecto)"))
 
     # El modelo se calienta MIENTRAS la persona calibra. Medido: la primera
     # llamada del día tarda 39 s -leer los pesos del disco- y 4.3 s cuando ya
@@ -360,8 +364,9 @@ def _warm_up(state) -> None:
 
     try:
         t0 = time.time()
-        backend = backends.OllamaBackend(state.model, temperature=0.2,
-                                         keep_alive="-1")
+        backend = backends.OllamaBackend(state.model,
+                                         temperature=state.temperature,
+                                         seed=state.seed, keep_alive="-1")
         variant = state.variant
         backend.complete(variant.system, variant.user("agua"),
                          json_mode=variant.json_mode)

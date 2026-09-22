@@ -95,6 +95,13 @@ def main(argv: list[str] | None = None) -> int:
     p_gaze.add_argument("--stick", type=float, default=None)
     p_gaze.add_argument("--fixation-ms", type=int, default=None)
     p_gaze.add_argument("--no-speech", action="store_true")
+    p_gaze.add_argument("--temperature", type=float, default=0.9,
+                        help="cuánta variedad. Más alta = opciones más "
+                             "distintas entre sí y más riesgo de invención")
+    p_gaze.add_argument("--seed", type=int, default=-1,
+                        help="semilla de muestreo; -1 la desactiva (por "
+                             "defecto). Con semilla fija la temperatura NO "
+                             "tiene efecto: la salida es identica siempre")
 
     p_demo = sub.add_parser(
         "demo",
@@ -114,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--limit", type=int, default=None,
                        help="usa solo los primeros N ítems (para una prueba rápida)")
     p_run.add_argument("--temperature", type=float, default=0.2)
+    p_run.add_argument("--seed", type=int, default=7,
+                       help="semilla de muestreo; -1 la desactiva. "
+                            "OBLIGATORIO desactivarla si se barre la "
+                            "temperatura: con semilla fija la salida no "
+                            "cambia y el barrido mide tres veces lo mismo")
     p_run.add_argument("--max-latency", type=float, default=4.0)
 
     for name in ("report", "rescore"):
@@ -204,7 +216,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.fixation_ms is not None:
             st.fixation_window_ms = args.fixation_ms
         st.validate()
-        return gaze_board.run(st, model=args.model, variant=args.variant)
+        return gaze_board.run(
+            st, model=args.model, variant=args.variant,
+            temperature=args.temperature,
+            seed=None if args.seed < 0 else args.seed)
 
     if args.command == "demo":
         from aac_semantic import demo
@@ -245,7 +260,9 @@ def main(argv: list[str] | None = None) -> int:
 
         chosen: list[backends.Backend] = []
         for name in names:
-            backend = backends.OllamaBackend(name, temperature=args.temperature)
+            backend = backends.OllamaBackend(
+                name, temperature=args.temperature,
+                seed=None if args.seed < 0 else args.seed)
             if not backend.available():
                 print(backends.ollama_report())
                 return 1

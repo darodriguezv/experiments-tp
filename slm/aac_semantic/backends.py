@@ -177,7 +177,7 @@ class OllamaBackend(Backend):
 
     def __init__(self, model: str, url: str = OLLAMA_URL,
                  temperature: float = 0.2, timeout_s: float = 180.0,
-                 seed: int = 7, keep_alive: str = "30m"):
+                 seed: int | None = 7, keep_alive: str = "30m"):
         self.model = model
         self.name = model
         self.url = url.rstrip("/")
@@ -227,10 +227,22 @@ class OllamaBackend(Backend):
             "options": {
                 "temperature": self.temperature,
                 "num_predict": max_tokens,
-                # A fixed seed makes a run reproducible. Without it, comparing
-                # two prompts means comparing two samples of noise as much as
-                # two prompts.
-                "seed": self.seed,
+                # Semilla fija = corrida reproducible. Sin ella, comparar dos
+                # prompts es comparar dos muestras de ruido tanto como dos
+                # prompts.
+                #
+                # **Pero fija la salida entera, y con eso anula la
+                # temperatura.** Medido contra la API: con `seed=7`, el mismo
+                # prompt a T=0.2 y a T=1.5 devuelve exactamente lo mismo; sin
+                # semilla, T=1.5 varía. O sea que un barrido de temperatura con
+                # la semilla puesta mide tres veces la misma corrida y devuelve
+                # tres filas idénticas que parecen un resultado.
+                #
+                # Por eso `seed=None` desactiva el pinneo. Es obligatorio para
+                # cualquier experimento donde la temperatura sea la variable, y
+                # el precio es que esa corrida deja de ser reproducible - lo que
+                # hay que compensar con más ítems, no con una semilla.
+                **({} if self.seed is None else {"seed": self.seed}),
                 # Enough context for a few-shot prompt plus the input, and no
                 # more: a large window costs VRAM that the model needs.
                 "num_ctx": 2048,

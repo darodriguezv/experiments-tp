@@ -371,9 +371,48 @@ def _v8() -> Prompt:
     )
 
 
+_SITUACION_ES = """La situación, para que entiendas qué estás haciendo:
+
+Una persona con ELA no puede hablar ni escribir. Mira un tablero en una pantalla y cada celda que elige le cuesta alrededor de un segundo de mirada sostenida. Lo que te llega es TODO lo que alcanzó a decir, junto: es UN SOLO MENSAJE, no una lista de palabras sueltas. "POR FAVOR AGUA" es una frase, no dos cosas.
+
+La opción que elija se va a decir EN VOZ ALTA por un sintetizador, ahí mismo, a quien esté en la habitación: casi siempre quien la cuida o alguien de su familia. Esa persona va a actuar según lo que escuche.
+
+Si tu frase dice algo que ella no quiso decir, corregirlo le cuesta otro minuto de mirada. Por eso una opción fiel y sosa siempre le gana a una elegante que agregó algo."""
+
+
+def _v9() -> Prompt:
+    """+ la situación: qué pasa con lo que sale, y quién lo escucha.
+
+    El prompt decía qué **es** el sistema -"módulo de expansión de un
+    dispositivo de comunicación aumentativa"- y nada de lo que **pasa** con su
+    salida: que se dice en voz alta, que hay alguien escuchando que va a actuar,
+    que corregir un malentendido cuesta otro minuto de mirada, y sobre todo que
+    lo que llega es un mensaje entero y no una lista de palabras.
+
+    Ese último punto sale de un fallo concreto y feo: qwen2.5:7b contestaba
+    "POR FAVOR AGUA" con `["por favor agua", "agua", "por favor"]`, o sea que
+    devolvía los pedazos de la entrada como si fueran tres mensajes distintos.
+    No estaba inventando ni perdiendo la polaridad: estaba leyendo la entrada
+    como una lista, y ninguna regla del prompt decía que no lo fuera.
+
+    Es información y no una regla más, que es la distinción que la ablación de
+    este módulo ya había medido: el glosario -información- subió el recall, y
+    las reglas en prosa de v7 lo bajaron.
+    """
+    base = _v6()
+    cabecera = "Sos el módulo de expansión de un dispositivo de comunicación aumentativa para una persona con ELA."
+    return Prompt(
+        variant="v9-situacion",
+        adds="la situación de uso: se dice en voz alta y alguien va a actuar",
+        system=base.system.replace(
+            cabecera, cabecera + chr(10) * 2 + _SITUACION_ES, 1),
+        json_mode=True,
+    )
+
+
 VARIANTS: dict[str, Prompt] = {
     p.variant: p for p in (_v0(), _v1(), _v2(), _v3(), _v4(), _v5(),
-                           _v6(), _v7(), _v8())
+                           _v6(), _v7(), _v8(), _v9())
 }
 
 

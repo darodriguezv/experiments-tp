@@ -82,6 +82,16 @@ class State:
 
     words: list[str] = field(default_factory=list)
     page: str = "core"
+
+    temperature: float = 0.2
+    seed: int | None = 7
+    """Temperatura de muestreo, y la semilla que hay que apagar para que sirva.
+
+    Con `seed` fijo la salida es idéntica a CUALQUIER temperatura -medido contra
+    la API: T=0.2 y T=1.5 devuelven lo mismo carácter por carácter- así que
+    subir la temperatura sin poner `seed=None` no cambia absolutamente nada. Es
+    la clase de perilla que parece funcionar porque el número cambia en la
+    pantalla."""
     model_i: int = 0
     variant_name: str = DEFAULT_VARIANT
 
@@ -128,8 +138,9 @@ def _expand(state: State) -> None:
     # abierto. Con el default de 5 minutos de Ollama, una pausa hace que la
     # frase siguiente pague la recarga -4.3 s el 3b, 6.9 s el 7b- y puede ser
     # la urgente.
-    backend = backends.OllamaBackend(state.model, temperature=0.2,
-                                     keep_alive="-1")
+    backend = backends.OllamaBackend(state.model,
+                                     temperature=state.temperature,
+                                     seed=state.seed, keep_alive="-1")
 
     completion = backend.complete(variant.system, variant.user(telegraphic),
                                   json_mode=variant.json_mode)
