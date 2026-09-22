@@ -255,6 +255,10 @@ class WebcamTracker:
         rect = getattr(face_info, "left_rect", None)
         self.last_eye_px = (int(rect[2]), int(rect[3])) if rect else None
 
+    @property
+    def name(self) -> str:
+        return f"gazefollower/MGazeNet ({self.mnn_threads} hilos)"
+
     def pose_drift(self):
         """Cuánto se corrió la cabeza respecto de la calibración.
 

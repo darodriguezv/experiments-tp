@@ -211,6 +211,18 @@ class GazeTracker:
         self.reference_pose: FacePose | None = None
         """Head position recorded at calibration time, if known."""
 
+    @property
+    def name(self) -> str:
+        """Qué estimador es, para que la pantalla no mienta.
+
+        El recuadro de estado mostraba `modelo=ridge`, que sale de `Settings` y
+        describe el regresor de EyeTrax. WebcamV1 hereda esa configuración pero
+        no usa ese regresor, así que su pantalla decía lo mismo - y con dos
+        módulos que comparten arnés, pantalla y tablero, eso alcanza para estar
+        midiendo uno mientras uno cree estar midiendo el otro.
+        """
+        return f"eyetrax/{self.settings.model_name}"
+
     # ------------------------------------------------------------- head pose
 
     def face_pose(self, frame) -> FacePose | None:

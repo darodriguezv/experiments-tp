@@ -106,7 +106,8 @@ def run(settings: Settings, make_tracker=None) -> None:
                 else:
                     linea_temblor = "temblor --"
                 ui.status_bar(img, [
-                    f"suavizado={settings.smoother}  modelo={settings.model_name}  "
+                    f"{getattr(tracker, 'name', 'desconocido')}  "
+                    f"suavizado={settings.smoother}  "
                     f"{fps:4.1f} fps   {linea_temblor}",
                     f"mirada=({sample.x:4d},{sample.y:4d})  "
                     f"crudo=({sample.raw_x:5d},{sample.raw_y:5d})",
