@@ -145,6 +145,14 @@ def run(tracker, points: int = 9, fresh: bool = False) -> bool:
     y = np.asarray(labels, dtype=np.float32)
     poses = np.asarray(poses_vistas, dtype=np.float32) if poses_vistas else None
 
+    # La referencia sale de las muestras, no de la pantalla de colocación.
+    # Entre colocarse y terminar los nueve puntos pasa casi un minuto, y la
+    # postura de la que el modelo aprendió es la de la recolección - no la de
+    # antes de empezar. Mediana y no promedio: si la persona se reacomodó a
+    # mitad, la mediana se queda con la postura en la que estuvo más tiempo en
+    # vez de inventar un punto intermedio donde no estuvo nunca.
+    _set_reference(tracker, poses)
+
     X, y, sesiones = _accumulate(tracker, X, y, poses, fresh=fresh)
 
     ok, err_cm, _ = tracker.calibration.calibrate(X, y)
@@ -233,3 +241,25 @@ def _accumulate(tracker, X, y, poses, fresh: bool):
         datos["pose"] = poses
     np.savez_compressed(path, **datos)
     return X, y, sesiones
+
+
+def _set_reference(tracker, poses) -> None:
+    """Fija la pose de referencia con la mediana de lo medido al calibrar."""
+    if poses is None or len(poses) == 0:
+        return
+    from aac_eyetrax.tracker import FacePose
+
+    m = np.median(poses, axis=0)
+    antes = tracker.reference_pose
+    tracker.reference_pose = FacePose(
+        cx=float(m[0]), cy=float(m[1]), eye_span=float(m[2]),
+        roll_deg=float(m[3]), yaw_ratio=float(m[4]), pitch_ratio=float(m[5]))
+    if antes is not None:
+        d = float(np.hypot(antes.cx - m[0], antes.cy - m[1]))
+        if d > 0.02 or abs(antes.eye_span - m[2]) > 0.01:
+            # Vale imprimirlo: mide cuánto se movió la persona entre colocarse
+            # y terminar, que es exactamente el error que se estaba metiendo
+            # sin que nadie lo viera.
+            print(f"[calibración] la postura al calibrar difiere de la de "
+                  f"colocación (centro {d:.3f}, ojos "
+                  f"{m[2] - antes.eye_span:+.3f}); manda la de las muestras.")

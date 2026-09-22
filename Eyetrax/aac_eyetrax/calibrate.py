@@ -25,8 +25,11 @@ def run(settings: Settings, method: str = "9point",
     with (make_tracker or GazeTracker)(settings) as tracker:
         print(f"[calibración] pantalla: {tracker.screen_w}x{tracker.screen_h}")
 
-        # La posición de la cabeza durante la calibración es la que el modelo
-        # va a asumir después, así que se fija antes de empezar y se guarda.
+        # La colocación previa sirve para arrancar bien, pero NO es la
+        # referencia definitiva: entre esta pantalla y el último de los nueve
+        # puntos pasan casi un minuto, y en ese rato la persona se acomoda. Si
+        # el estimador puede decir en qué postura estuvo *durante* la
+        # recolección, esa gana - ver más abajo.
         pose = None
         if settings.check_position:
             pose = positioning.run(
@@ -46,7 +49,11 @@ def run(settings: Settings, method: str = "9point",
             print("[calibración] cancelada o sin muestras útiles - no se guardó nada.")
             return None
 
-        tracker.reference_pose = pose
+        # Solo se usa la pose previa si el estimador no determinó la suya. Con
+        # `or` y no con asignación directa: pisar la que salió de las muestras
+        # mandaría a la persona a una postura en la que nunca calibró, que es
+        # justo el error que esto evita.
+        tracker.reference_pose = tracker.reference_pose or pose
         path = tracker.save()
         print(f"[calibración] guardado -> {path}")
         if pose is not None:

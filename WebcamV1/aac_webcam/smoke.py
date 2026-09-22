@@ -239,6 +239,11 @@ def _blink_heuristic() -> str:
     return f"abierto/cerrado/abierto con umbral {BLINK_RATIO:.0%} de la referencia"
 
 
+class _FakePose:
+    cx, cy, eye_span = 0.5, 0.42, 0.18
+    roll_deg, yaw_ratio, pitch_ratio = 0.0, 0.0, 0.0
+
+
 def _calibration_collects_and_fits() -> str:
     """La recolección completa, con cámara y persona simuladas.
 
@@ -272,7 +277,12 @@ def _calibration_collects_and_fits() -> str:
             self.settings.samples_per_point = MUESTRAS
             self.screen_w, self.screen_h = 1920, 1080
             self.screen_cm, self.camera_cm = (34.4, 19.3), (17.2, -0.7)
+            self.reference_pose = None
             self.pedidas = 0
+            # Una postura estable durante toda la recoleccion, para poder
+            # comprobar que la referencia sale de las muestras.
+            self.pose_fija = _FakePose()
+
             import gf_compat
 
             gf_compat.patch()
@@ -288,6 +298,10 @@ def _calibration_collects_and_fits() -> str:
 
             self.calibration = SVRCalibration(model_save_path=carpeta)
             self.rng = np.random.default_rng(0)
+
+        @property
+        def last_pose(self):
+            return self.pose_fija
 
         def open_window(self, window):
             pass
@@ -337,10 +351,17 @@ def _calibration_collects_and_fits() -> str:
 
     assert ok, "la calibración simulada no llegó a entrenar"
     assert tracker.calibration.has_calibrated, "quedó sin marcar como calibrada"
+    # La referencia tiene que salir de lo medido AL calibrar, no de la
+    # pantalla de colocacion: entre una cosa y la otra pasa casi un minuto.
+    ref = tracker.reference_pose
+    assert ref is not None, "no se fijo la pose de referencia"
+    assert abs(ref.cx - 0.5) < 1e-3 and abs(ref.eye_span - 0.18) < 1e-3, (
+        f"la referencia no salio de las muestras: {ref}")
     assert tracker.pedidas == 9 * MUESTRAS, (
         f"pidió {tracker.pedidas} muestras y esperaba {9 * MUESTRAS}: el bucle "
         f"no está recolectando lo que dice")
-    return f"9 puntos x {MUESTRAS} muestras recolectados y la SVR ajustó"
+    return (f"9 puntos x {MUESTRAS} muestras, la SVR ajustó, y la "
+            f"referencia salió de las muestras")
 
 
 def _calibration_accumulates() -> str:
