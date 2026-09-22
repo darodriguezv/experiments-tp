@@ -152,7 +152,7 @@ def _settings(args) -> Settings:
 
 
 def _al_dia(settings, args) -> bool:
-    """Recalibra antes de empezar, salvo `--skip-calibration`.
+    """Calibra al empezar. Es el arranque de sesión, no un trámite.
 
     La postura exacta de una calibración anterior no se reproduce: uno se
     sienta distinto, la silla cambia de altura, la pantalla se inclina. Como el
@@ -160,14 +160,16 @@ def _al_dia(settings, args) -> bool:
     sistemático que ningún suavizado corrige - y encima invisible, porque el
     cursor se ve igual de firme estando corrido.
 
-    **Acá la puesta al día es completa (9 puntos) y no corta como en
-    WebcamV1.** La diferencia no es un capricho: WebcamV1 acumula las muestras
-    de todas las sesiones, así que una pasada corta le agrega posturas a lo que
-    ya sabe. Las rutinas de calibración del paquete `eyetrax` son dueñas de su
-    bucle y no dejan quedarse con las muestras, así que acá cada calibración
-    REEMPLAZA a la anterior; una corta dejaría al modelo sabiendo menos que
-    antes. Es una limitación real de este camino y conviene tenerla presente al
-    comparar los números de los dos módulos.
+    Calibrar al empezar a usar el dispositivo es el modelo de uso previsto: lo
+    mismo que hacen los rastreadores comerciales, y una vez por sesión no se
+    parece en nada a una vez por frase.
+
+    **Diferencia con WebcamV1, que importa al comparar.** Allá las muestras de
+    todas las sesiones se acumulan, así que cada calibración le agrega posturas
+    al modelo. Las rutinas del paquete `eyetrax` son dueñas de su bucle y no
+    dejan quedarse con las muestras, así que acá cada calibración REEMPLAZA a
+    la anterior y el modelo nunca conoce más de una postura por vez. Es una
+    limitación real de este camino, no una elección.
     """
     from aac_eyetrax import calibrate
 

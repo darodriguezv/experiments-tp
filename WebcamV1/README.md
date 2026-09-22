@@ -124,6 +124,42 @@ núcleos:
 son ~11 cuadros por selección: alcanza, pero el cursor se siente más pesado.
 Si la precisión no mejora lo suficiente, este costo no se justifica.
 
+## La calibración es el arranque de sesión
+
+`live`, `accuracy` y `board` **calibran antes de empezar**. No es un trámite
+que convenga saltear: la postura exacta de una sesión anterior no se reproduce
+—uno se sienta distinto, la silla cambia de altura, la pantalla se inclina— y
+como el modelo aprende una postura, reusarlo arranca con un error sistemático
+que ningún suavizado corrige. Peor: es invisible, porque el cursor se ve igual
+de firme estando corrido.
+
+Una vez por sesión de uso es el modelo previsto, igual que en los rastreadores
+comerciales, y no se parece en nada a una vez por frase. Por eso van los 9
+puntos completos: con el minuto ya pagado, abreviar solo empeora el modelo.
+
+**Y cada calibración se suma a las anteriores** (hasta 6 sesiones), con las
+muestras crudas guardadas en `samples.npz`. Recalibrar reemplazando era lo que
+hacía inútil recalibrar: se cambiaba una postura por otra y el modelo seguía
+conociendo una sola. Acumulando, moverse entre sesiones es justamente lo que lo
+vuelve tolerante.
+
+```
+run.cmd calibrate --monitor 0            # suma a lo anterior
+run.cmd calibrate --monitor 0 --fresh    # descarta y empieza de cero
+run.cmd board --monitor 0 --skip-calibration   # usa lo acumulado tal cual
+```
+
+La pregunta que esto vuelve medible: **¿cuántas sesiones hacen falta para que
+recalibrar deje de ser necesario?**
+
+```
+run.cmd accuracy --monitor 0                      # calibrando
+run.cmd accuracy --monitor 0 --skip-calibration   # con lo acumulado
+```
+
+La brecha entre esos dos números, sesión tras sesión, dice si la acumulación
+está funcionando. Si se cierra, el modelo se volvió tolerante a la postura.
+
 ## Uso
 
 ```

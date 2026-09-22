@@ -8,10 +8,11 @@
     run.cmd accuracy     # error en grados, comparable con Eyetrax
     run.cmd board        # el tablero por permanencia
 
-live, accuracy y board hacen una puesta al día de la calibración antes de
-empezar: la postura exacta de una sesión anterior no se reproduce. Como las
-calibraciones se acumulan, esa puesta al día es corta (5 puntos) y aun así el
-modelo termina conociendo más posturas. `--skip-calibration` la saltea.
+live, accuracy y board calibran antes de empezar: la postura exacta de una
+sesión anterior no se reproduce. Es el arranque de sesión previsto, no un
+trámite, así que van los 9 puntos completos. Las calibraciones se acumulan, de
+modo que cada sesión le agrega posturas al modelo. `--skip-calibration` la
+saltea; `--method 5point` la abrevia.
 
 Mismo arnés que Eyetrax; lo único distinto es el estimador. Esa es la
 condición para que `accuracy` de los dos módulos sea comparable.
@@ -135,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     _common(p_live)
     p_live.add_argument("--skip-calibration", action="store_true",
                         help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
-    p_live.add_argument("--method", default="5point",
+    p_live.add_argument("--method", default="9point",
                         choices=("5point", "9point", "13point"))
 
     p_acc = sub.add_parser("accuracy", help="error en grados")
@@ -145,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     p_acc.add_argument("--hold", type=float, default=2.0)
     p_acc.add_argument("--skip-calibration", action="store_true",
                        help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
-    p_acc.add_argument("--method", default="5point",
+    p_acc.add_argument("--method", default="9point",
                        choices=("5point", "9point", "13point"))
 
     p_board = sub.add_parser("board", help="tablero por permanencia")
@@ -158,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     p_board.add_argument("--no-speech", action="store_true")
     p_board.add_argument("--skip-calibration", action="store_true",
                          help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
-    p_board.add_argument("--method", default="5point",
+    p_board.add_argument("--method", default="9point",
                          choices=("5point", "9point", "13point"))
 
     p_pipe = sub.add_parser("pipeline", help="flujo completo")
@@ -227,29 +228,36 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if calibrate.run(settings, args.method, make) else 1
 
     def _al_dia() -> bool:
-        """Recalibra al empezar, salvo que se pida lo contrario.
+        """Calibra al empezar. Es el arranque de sesión, no un trámite.
 
         La postura exacta de una calibración anterior **no se reproduce**: uno
         se sienta distinto, la silla cambia de altura, la pantalla se inclina.
         Y como el modelo aprende una postura, reusarlo sin recalibrar arranca
-        con un error sistemático que ningún suavizado corrige.
+        con un error sistemático que ningún suavizado corrige - y encima
+        invisible, porque el cursor se ve igual de firme estando corrido.
 
-        Lo que vuelve esto barato es que las calibraciones se **acumulan**: la
-        de hoy se suma a las anteriores en vez de reemplazarlas. Entonces la
-        puesta al día de cada sesión puede ser corta -5 puntos, unos 20 s- y
-        aun así el modelo termina conociendo más posturas que antes, no menos.
-        Calibración corta y frecuente le gana a una larga y vieja.
+        Calibrar al empezar a usar el dispositivo es el modelo de uso previsto,
+        no un costo a minimizar: es lo mismo que hacen los rastreadores
+        comerciales, y una vez por sesión no se parece en nada a una vez por
+        frase. Por eso se calibran los 9 puntos completos y no una versión
+        abreviada: con el minuto ya pagado, darle menos cobertura a la sesión
+        solo empeora el modelo.
+
+        Encima las calibraciones se **acumulan**, así que cada sesión le agrega
+        posturas a lo que el modelo ya sabía en vez de reemplazarlas.
 
         Con `--skip-calibration` se usa la guardada tal cual, que sirve para
-        comparar dos configuraciones sin que la calibración cambie en el medio.
+        comparar dos configuraciones sin que la calibración cambie en el medio
+        - y para medir si lo acumulado ya alcanza sin recalibrar.
         """
         if getattr(args, "skip_calibration", False):
             print("[calibración] se reusa la guardada (--skip-calibration). "
                   "Si te sentaste distinto, el error va a ser sistemático.")
             return True
-        metodo = getattr(args, "method", None) or "5point"
-        print(f"[calibración] puesta al día de {metodo} antes de empezar "
-              f"(--skip-calibration para saltearla)")
+        metodo = getattr(args, "method", None) or "9point"
+        print(f"[calibración] calibrando ({metodo}) antes de empezar "
+              f"(--skip-calibration para saltearla, --method 5point para "
+              f"abreviar)")
         return calibrate.run(settings, metodo, make) is not None
 
     if args.command == "live":
