@@ -151,6 +151,36 @@ def _settings(args) -> Settings:
     return s
 
 
+def _al_dia(settings, args) -> bool:
+    """Recalibra antes de empezar, salvo `--skip-calibration`.
+
+    La postura exacta de una calibración anterior no se reproduce: uno se
+    sienta distinto, la silla cambia de altura, la pantalla se inclina. Como el
+    modelo aprende una postura, reusarlo sin recalibrar arranca con un error
+    sistemático que ningún suavizado corrige - y encima invisible, porque el
+    cursor se ve igual de firme estando corrido.
+
+    **Acá la puesta al día es completa (9 puntos) y no corta como en
+    WebcamV1.** La diferencia no es un capricho: WebcamV1 acumula las muestras
+    de todas las sesiones, así que una pasada corta le agrega posturas a lo que
+    ya sabe. Las rutinas de calibración del paquete `eyetrax` son dueñas de su
+    bucle y no dejan quedarse con las muestras, así que acá cada calibración
+    REEMPLAZA a la anterior; una corta dejaría al modelo sabiendo menos que
+    antes. Es una limitación real de este camino y conviene tenerla presente al
+    comparar los números de los dos módulos.
+    """
+    from aac_eyetrax import calibrate
+
+    if getattr(args, "skip_calibration", False):
+        print("[calibración] se reusa la guardada (--skip-calibration). "
+              "Si te sentaste distinto, el error va a ser sistemático.")
+        return True
+    metodo = getattr(args, "method", None) or "9point"
+    print(f"[calibración] recalibrando ({metodo}) antes de empezar "
+          f"(--skip-calibration para saltearla)")
+    return calibrate.run(settings, metodo) is not None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="main.py",
@@ -232,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
         help="segundos descartados al principio de cada punto",
     )
 
+    for _p in (p_live, p_board, p_acc):
+        _p.add_argument('--skip-calibration', action='store_true',
+                        help="no recalibrar: usar la guardada tal cual. Por defecto se recalibra, porque la postura de una sesion anterior no se reproduce")
+        _p.add_argument('--method', choices=CALIBRATIONS,
+                        default='9point')
+
     args = parser.parse_args(argv)
 
     if args.command == "monitors":
@@ -265,18 +301,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "live":
         from aac_eyetrax import live_gaze
 
+        if not _al_dia(settings, args):
+            return 1
         live_gaze.run(settings)
         return 0
 
     if args.command == "board":
         from aac_eyetrax import aac_board
 
+        if not _al_dia(settings, args):
+            return 1
         aac_board.run(settings)
         return 0
 
     if args.command == "accuracy":
         from aac_eyetrax import accuracy
 
+        if not _al_dia(settings, args):
+            return 1
         stats = accuracy.run(settings, args.rows, args.cols, args.hold, args.settle)
         return 0 if stats else 1
 

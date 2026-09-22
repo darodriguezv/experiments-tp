@@ -8,6 +8,11 @@
     run.cmd accuracy     # error en grados, comparable con Eyetrax
     run.cmd board        # el tablero por permanencia
 
+live, accuracy y board hacen una puesta al día de la calibración antes de
+empezar: la postura exacta de una sesión anterior no se reproduce. Como las
+calibraciones se acumulan, esa puesta al día es corta (5 puntos) y aun así el
+modelo termina conociendo más posturas. `--skip-calibration` la saltea.
+
 Mismo arnés que Eyetrax; lo único distinto es el estimador. Esa es la
 condición para que `accuracy` de los dos módulos sea comparable.
 """
@@ -128,12 +133,20 @@ def main(argv: list[str] | None = None) -> int:
 
     p_live = sub.add_parser("live", help="cursor de mirada en vivo")
     _common(p_live)
+    p_live.add_argument("--skip-calibration", action="store_true",
+                        help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
+    p_live.add_argument("--method", default="5point",
+                        choices=("5point", "9point", "13point"))
 
     p_acc = sub.add_parser("accuracy", help="error en grados")
     _common(p_acc)
     p_acc.add_argument("--rows", type=int, default=3)
     p_acc.add_argument("--cols", type=int, default=3)
     p_acc.add_argument("--hold", type=float, default=2.0)
+    p_acc.add_argument("--skip-calibration", action="store_true",
+                       help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
+    p_acc.add_argument("--method", default="5point",
+                       choices=("5point", "9point", "13point"))
 
     p_board = sub.add_parser("board", help="tablero por permanencia")
     _common(p_board)
@@ -143,6 +156,10 @@ def main(argv: list[str] | None = None) -> int:
     p_board.add_argument("--fixation-ms", type=int, default=None,
                          help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_board.add_argument("--no-speech", action="store_true")
+    p_board.add_argument("--skip-calibration", action="store_true",
+                         help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
+    p_board.add_argument("--method", default="5point",
+                         choices=("5point", "9point", "13point"))
 
     p_pipe = sub.add_parser("pipeline", help="flujo completo")
     _common(p_pipe)
@@ -209,11 +226,41 @@ def main(argv: list[str] | None = None) -> int:
         print(settings.describe_geometry(), "\n")
         return 0 if calibrate.run(settings, args.method, make) else 1
 
+    def _al_dia() -> bool:
+        """Recalibra al empezar, salvo que se pida lo contrario.
+
+        La postura exacta de una calibración anterior **no se reproduce**: uno
+        se sienta distinto, la silla cambia de altura, la pantalla se inclina.
+        Y como el modelo aprende una postura, reusarlo sin recalibrar arranca
+        con un error sistemático que ningún suavizado corrige.
+
+        Lo que vuelve esto barato es que las calibraciones se **acumulan**: la
+        de hoy se suma a las anteriores en vez de reemplazarlas. Entonces la
+        puesta al día de cada sesión puede ser corta -5 puntos, unos 20 s- y
+        aun así el modelo termina conociendo más posturas que antes, no menos.
+        Calibración corta y frecuente le gana a una larga y vieja.
+
+        Con `--skip-calibration` se usa la guardada tal cual, que sirve para
+        comparar dos configuraciones sin que la calibración cambie en el medio.
+        """
+        if getattr(args, "skip_calibration", False):
+            print("[calibración] se reusa la guardada (--skip-calibration). "
+                  "Si te sentaste distinto, el error va a ser sistemático.")
+            return True
+        metodo = getattr(args, "method", None) or "5point"
+        print(f"[calibración] puesta al día de {metodo} antes de empezar "
+              f"(--skip-calibration para saltearla)")
+        return calibrate.run(settings, metodo, make) is not None
+
     if args.command == "live":
+        if not _al_dia():
+            return 1
         live_gaze.run(settings, make)
         return 0
 
     if args.command == "accuracy":
+        if not _al_dia():
+            return 1
         stats = accuracy.run(settings, args.rows, args.cols, args.hold,
                              make_tracker=make)
         return 0 if stats is not None else 1
@@ -221,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "board":
         if args.no_speech:
             settings.speak = False
+        if not _al_dia():
+            return 1
         aac_board.run(settings, make)
         return 0
 
