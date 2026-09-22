@@ -113,7 +113,23 @@ def needs_stop(telegraphic: str) -> bool:
 
 
 def is_uncertain(telegraphic: str) -> bool:
-    return "tal vez" in normalise(telegraphic)
+    """La entrada expresa duda, así que la salida no puede resolverla.
+
+    Dos formas, y la segunda la destapó el corpus ampliado: `TAL VEZ` es la
+    palabra del tablero, pero alguien que duda también escribe `SI NO` -las dos
+    respuestas seguidas-, y ahí el filtro no hacía nada. Los candidatos
+    resolvían la duda a "no" y eso pasaba como válido.
+
+    Es el peor tipo de fallo de este módulo: la persona logró comunicar
+    exactamente una cosa -que no está segura- y el sistema la reemplaza por una
+    decisión que ella no tomó. Y no es raro: dudar es lo más humano que puede
+    pasar en una conversación sobre el propio cuerpo.
+    """
+    t = normalise(telegraphic)
+    if "tal vez" in t:
+        return True
+    tokens = t.split()
+    return "si" in tokens and "no" in tokens
 
 
 def apply(telegraphic: str, candidates: list[str],

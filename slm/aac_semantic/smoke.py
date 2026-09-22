@@ -687,12 +687,41 @@ def _guard_accepts_spelled_synonyms() -> str:
     return "sinónimos deletreados aceptados; sustantivos ajenos igual de vetados"
 
 
+def _guard_protects_doubt() -> str:
+    """Una duda no se resuelve a sí o a no.
+
+    `TAL VEZ` es la palabra del tablero, pero alguien que duda también escribe
+    `SI NO`: las dos respuestas seguidas. El filtro solo miraba "tal vez", así
+    que ahí no hacía nada y los candidatos resolvían la duda a "no" - lo que el
+    corpus ampliado detectó como el único fallo de polaridad que sobrevivía al
+    filtro.
+
+    Es el peor tipo de fallo del módulo: la persona logró comunicar exactamente
+    una cosa -que no está segura- y el sistema la reemplaza por una decisión
+    que ella no tomó.
+    """
+    from aac_semantic import guard
+
+    for entrada in ("SI NO", "NO SI", "TAL VEZ AGUA", "TAL VEZ"):
+        assert guard.is_uncertain(entrada), f"{entrada!r} no se ve como duda"
+    for entrada in ("SI POR FAVOR", "NO BASTA DOLOR", "QUIERO AGUA", "NO"):
+        assert not guard.is_uncertain(entrada), (
+            f"{entrada!r} se tomó como duda y no lo es")
+
+    r = guard.guarded("SI NO", ["no", "si", "no, gracias", "si, pero no"])
+    razones = dict((t, por) for t, por in r.dropped)
+    assert razones.get("no", "").startswith("resolvió"), (
+        f"'no' sobrevivió a una entrada de duda: {r.candidates}")
+    return "SI NO y TAL VEZ protegidos; sí/no solos descartados"
+
+
 CHECKS = (
     ("el corpus carga y valida", _corpus_loads),
     ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
     ("todas las trampas se disparan", _traps_actually_trip),
     ("sin contaminación prompt/corpus", _no_prompt_corpus_contamination),
     ("el filtro garantiza la polaridad", _guard_guarantees_polarity),
+    ("el filtro protege la duda", _guard_protects_doubt),
     ("el filtro no descarta lo correcto", _guard_keeps_good_candidates),
     ("el filtro acepta sinónimos deletreados", _guard_accepts_spelled_synonyms),
     ("dedupe atrapa la repetición", _dedupe_catches_repetition),
