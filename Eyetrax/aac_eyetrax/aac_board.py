@@ -247,7 +247,17 @@ def run(settings: Settings, make_tracker=None) -> None:
                     _draw_tile(img, t, progress if is_hot else 0.0, is_hot)
 
                 if sample.ok:
-                    ui.gaze_cursor(img, sample.x, sample.y)
+                    # El cursor grande va en el punto ESTABILIZADO, que es el
+                    # que decide la selección. Dibujarlo en el punto por cuadro
+                    # mostraba un temblor que el sistema ya estaba ignorando, y
+                    # eso desanima: parece que no entiende hacia dónde se mira
+                    # cuando en realidad sí. El punto vivo queda como marca
+                    # tenue, para no perder la sensación de respuesta.
+                    if stable:
+                        ui.gaze_cursor(img, sample.x, sample.y, ui.RAW, 7)
+                        ui.gaze_cursor(img, stable[0], stable[1])
+                    else:
+                        ui.gaze_cursor(img, sample.x, sample.y)
                     if settings.show_raw_gaze:
                         ui.gaze_cursor(img, sample.raw_x, sample.raw_y, ui.RAW, 9)
 

@@ -56,11 +56,21 @@ HYSTERESIS = 1.45
 """Una vez alineado se acepta algo más de holgura, para que el estado no
 parpadee justo en el límite."""
 
-HOLD_S = 1.2
-"""Cuánto hay que mantener la posición correcta antes de continuar."""
+HOLD_S = 2.2
+"""Cuánto hay que mantener la posición correcta -y quieta- antes de seguir.
 
-FILTER_N = 7
-"""Cuadros de la mediana temporal (~0.25 s a 30 fps)."""
+Era 1.2 s y resultó apurado: la cuenta arrancaba apenas uno pasaba por la zona
+buena, todavía acomodándose, y la guía saltaba a la calibración antes de que la
+persona hubiera terminado de ubicarse. Y la postura de ese momento es la que el
+modelo va a dar por supuesta después, así que apurarla se paga en precisión
+durante toda la sesión."""
+
+FILTER_N = 15
+"""Tope de cuadros en la mediana. El límite real lo pone `FILTER_WINDOW_S`;
+esto solo evita que la cola crezca sin control si el estimador va muy rápido."""
+
+FILTER_WINDOW_S = 0.22
+"""Ventana de la mediana, en segundos. Ver `PoseFilter.update`."""
 
 LOST_RESET_S = 0.6
 """Tras este tiempo sin cara, se descarta el historial del filtro."""
@@ -73,14 +83,32 @@ class PoseFilter:
     valor disparatado, y la mediana lo ignora en lugar de repartirlo.
     """
 
-    def __init__(self, n: int = FILTER_N) -> None:
+    def __init__(self, n: int = FILTER_N,
+                 window_s: float = FILTER_WINDOW_S) -> None:
         self.buf: deque[FacePose] = deque(maxlen=n)
+        self.stamps: deque[float] = deque(maxlen=n)
+        self.window_s = window_s
 
     def reset(self) -> None:
         self.buf.clear()
+        self.stamps.clear()
 
-    def update(self, pose: FacePose) -> FacePose:
+    def update(self, pose: FacePose, now: float | None = None) -> FacePose:
+        """Mediana de la ventana. La ventana es de TIEMPO, no de cuadros.
+
+        Contar cuadros parecía equivalente y no lo es: siete cuadros son 0.23 s
+        a 30 fps y 0.50 s a 14 fps, que es lo que corre GazeFollower. Medio
+        segundo de atraso entre lo que la persona hace y lo que ve en la guía
+        la hace corregir de más y pasarse para el otro lado, una y otra vez.
+        Con la ventana en segundos, la guía responde igual sin importar a qué
+        velocidad vaya el estimador.
+        """
+        now = time.time() if now is None else now
         self.buf.append(pose)
+        self.stamps.append(now)
+        while len(self.stamps) > 3 and now - self.stamps[0] > self.window_s:
+            self.stamps.popleft()
+            self.buf.popleft()
         if len(self.buf) < 3:
             return pose  # al principio conviene responder rápido
 
@@ -92,6 +120,25 @@ class PoseFilter:
             roll_deg=med("roll_deg"), yaw_ratio=med("yaw_ratio"),
             pitch_ratio=med("pitch_ratio"),
         )
+
+    def is_still(self, tol_centre: float = 0.012,
+                 tol_span: float = 0.010) -> bool:
+        """¿La persona dejó de moverse, o todavía se está acomodando?
+
+        Estar dentro de la tolerancia no es lo mismo que estar quieto: se puede
+        cruzar la zona buena de paso, mientras uno todavía se acomoda. Sin esta
+        distinción la guía arranca la cuenta apenas uno pasa por el lugar
+        correcto y sigue de largo a la calibración antes de que la persona haya
+        terminado de ubicarse - que es exactamente el apuro que se siente.
+        """
+        if len(self.buf) < 3:
+            return False
+        xs = [p.cx for p in self.buf]
+        ys = [p.cy for p in self.buf]
+        sp = [p.eye_span for p in self.buf]
+        return (max(xs) - min(xs) <= tol_centre
+                and max(ys) - min(ys) <= tol_centre
+                and max(sp) - min(sp) <= tol_span)
 
 
 def _preview_rect(screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
@@ -193,23 +240,49 @@ def _hints(
     return out
 
 
-def _draw_face_guide(img, rect, pose: FacePose | None, target: FacePose, aligned: bool):
-    """Dibuja el óvalo objetivo y, si hay cara, la posición actual."""
+def _draw_face_guide(img, rect, pose: FacePose | None, target: FacePose,
+                     aligned: bool, has_reference: bool = True):
+    """Dibuja lo que se acepta y, si hay cara, la posición actual.
+
+    Sin referencia se dibuja la **zona**, no un punto, y ese es el arreglo de
+    un problema real: la aceptación usaba rangos amplios -`CX_MIN..CX_MAX`,
+    `SPAN_MIN..SPAN_MAX`- pero el dibujo mostraba un óvalo único en
+    `DEFAULT_POSE`, con una flecha apuntándole. O sea que la pantalla pedía una
+    posición exacta que el código no exigía, y la persona perseguía un objetivo
+    inalcanzable mientras ya estaba bien colocada.
+
+    Con referencia sí hay un punto que alcanzar -la postura de la calibración-
+    y ahí el óvalo y la flecha son lo correcto.
+    """
     x1, y1, x2, y2 = rect
     pw, ph = x2 - x1, y2 - y1
-
-    # El objetivo se dibuja en coordenadas espejadas, igual que la imagen.
-    t_eye_x = x1 + int((1.0 - target.cx) * pw)
-    t_eye_y = y1 + int(target.cy * ph)
-    t_centre, t_axes = _head_ellipse(t_eye_x, t_eye_y, target.eye_span * pw)
-
     colour = ui.GOOD if aligned else ui.ACCENT
-    # Guía objetivo: trazo discontinuo, para distinguirla del óvalo real.
-    for a0 in range(0, 360, 22):
-        cv2.ellipse(img, t_centre, t_axes, 0, a0, a0 + 12, colour, 4, cv2.LINE_AA)
-    # Marca a la altura de los ojos: es lo que hay que hacer coincidir.
-    cv2.line(img, (t_eye_x - t_axes[0] // 2, t_eye_y),
-             (t_eye_x + t_axes[0] // 2, t_eye_y), colour, 2, cv2.LINE_AA)
+
+    if not has_reference:
+        # La zona aceptada, en espejo. Rectángulo redondeado y translúcido:
+        # dice "en cualquier parte de acá" sin sugerir un centro.
+        zx1 = x1 + int((1.0 - CX_MAX) * pw)
+        zx2 = x1 + int((1.0 - CX_MIN) * pw)
+        zy1 = y1 + int(CY_MIN * ph)
+        zy2 = y1 + int(CY_MAX * ph)
+        capa = img.copy()
+        cv2.rectangle(capa, (zx1, zy1), (zx2, zy2), colour, -1)
+        cv2.addWeighted(capa, 0.12, img, 0.88, 0, img)
+        cv2.rectangle(img, (zx1, zy1), (zx2, zy2), colour, 3, cv2.LINE_AA)
+        ui.text_center(img, "los ojos, dentro de esta zona",
+                       (zx1 + zx2) // 2, zy1 - 16, 20, colour)
+    else:
+        # El objetivo se dibuja en coordenadas espejadas, igual que la imagen.
+        t_eye_x = x1 + int((1.0 - target.cx) * pw)
+        t_eye_y = y1 + int(target.cy * ph)
+        t_centre, t_axes = _head_ellipse(t_eye_x, t_eye_y, target.eye_span * pw)
+        # Guía objetivo: trazo discontinuo, para distinguirla del óvalo real.
+        for a0 in range(0, 360, 22):
+            cv2.ellipse(img, t_centre, t_axes, 0, a0, a0 + 12, colour, 4,
+                        cv2.LINE_AA)
+        # Marca a la altura de los ojos: es lo que hay que hacer coincidir.
+        cv2.line(img, (t_eye_x - t_axes[0] // 2, t_eye_y),
+                 (t_eye_x + t_axes[0] // 2, t_eye_y), colour, 2, cv2.LINE_AA)
 
     if pose is not None:
         f_eye_x = x1 + int((1.0 - pose.cx) * pw)
@@ -224,7 +297,10 @@ def _draw_face_guide(img, rect, pose: FacePose | None, target: FacePose, aligned
         dx, dy = int(half * np.cos(a)), int(half * np.sin(a))
         cv2.line(img, (f_eye_x - dx, f_eye_y - dy), (f_eye_x + dx, f_eye_y + dy),
                  ui.GOOD if aligned else ui.TEXT, 2, cv2.LINE_AA)
-        if not aligned:
+        # La flecha solo tiene sentido cuando hay un punto al que ir. Sin
+        # referencia el objetivo es una zona, y una flecha hacia su centro
+        # volvería a pedir exactitud donde no hace falta.
+        if not aligned and has_reference:
             cv2.arrowedLine(img, (f_eye_x, f_eye_y), (t_eye_x, t_eye_y),
                             ui.ACCENT, 3, cv2.LINE_AA, tipLength=0.25)
 
@@ -291,7 +367,12 @@ def run(
                 aligned = not hints
             was_aligned = aligned
 
-            if aligned:
+            # Estar dentro de la zona no alcanza: hay que haber dejado de
+            # moverse. Si no, la cuenta arranca al pasar de largo por el lugar
+            # correcto y la guia sigue a la calibracion con la persona todavia
+            # acomodandose.
+            quieto = filt.is_still()
+            if aligned and quieto:
                 if aligned_since is None:
                     aligned_since = now
             else:
@@ -315,7 +396,7 @@ def run(
             img[py1:py2, px1:px2] = (preview * 0.55).astype(np.uint8)
             cv2.rectangle(img, (px1 - 2, py1 - 2), (px2 + 1, py2 + 1), ui.TILE, 2)
 
-            _draw_face_guide(img, rect, pose, target, aligned)
+            _draw_face_guide(img, rect, pose, target, aligned, has_reference)
 
             if pose is None:
                 ui.text_center(img, "NO SE DETECTA LA CARA", w // 2,
@@ -328,6 +409,11 @@ def run(
                 if len(hints) > 1:
                     ui.text_center(img, "   ".join(hints[1:]), w // 2,
                                    int(h * 0.795), 24, ui.TEXT_DIM)
+            elif not quieto:
+                ui.text_center(img, "BIEN · QUÉDESE QUIETO", w // 2,
+                               int(h * 0.74), 46, ui.ACCENT, bold=True)
+                ui.text_center(img, "la cuenta empieza cuando deje de moverse",
+                               w // 2, int(h * 0.795), 24, ui.TEXT_DIM)
             else:
                 ui.text_center(img, "PERFECTO · NO SE MUEVA", w // 2,
                                int(h * 0.74), 46, ui.GOOD, bold=True)

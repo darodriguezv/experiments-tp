@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import time
 
+from collections import deque
+
 import cv2
+import numpy as np
 
 
 from . import positioning, ui
 from .video import camera, iter_frames
 from .config import Settings
-from .tracker import GazeTracker
+from .accuracy import PX_PER_DEG
+from .tracker import GazeTracker, MedianWindow
 
 WINDOW = "CAA - mirada en vivo"
 
@@ -49,6 +53,12 @@ def run(settings: Settings, make_tracker=None) -> None:
         fps = 0.0
         t0 = time.time()
 
+        estable = MedianWindow(settings.fixation_window_ms / 1000.0)
+        # Medidor de temblor: distancia mediana entre el punto por cuadro y el
+        # estabilizado, sobre el ultimo segundo. Convierte "vibra demasiado" en
+        # un numero, que es lo unico con lo que se puede decidir si hay que
+        # tocar el suavizado, la ventana, o si el problema es la calibracion.
+        temblores: deque = deque(maxlen=60)
         tracker.open_window(WINDOW)
         with camera(settings.camera_index, *settings.capture_size) as cap:
             for frame in iter_frames(cap):
@@ -58,12 +68,23 @@ def run(settings: Settings, make_tracker=None) -> None:
                 _grid(img, w, h)
 
                 if sample.ok:
+                    # Mismo punto estabilizado que usa el tablero. Antes `live`
+                    # mostraba el punto por cuadro y el tablero decidia sobre la
+                    # mediana, asi que `live` se veia mucho peor de lo que el
+                    # tablero se comporta - y `live` es justamente la pantalla
+                    # donde uno juzga si la calibracion sirve.
+                    sx, sy = estable.push(sample.x, sample.y)
+                    temblores.append(float(np.hypot(sample.x - sx,
+                                                    sample.y - sy)))
                     if show_raw:
                         ui.gaze_cursor(img, sample.raw_x, sample.raw_y, ui.RAW, 10)
-                    ui.gaze_cursor(img, sample.x, sample.y)
+                    ui.gaze_cursor(img, sample.x, sample.y, ui.RAW, 7)
+                    ui.gaze_cursor(img, sx, sy)
                 elif sample.blink:
+                    estable.clear()
                     ui.banner(img, "PARPADEO", ui.TEXT_DIM)
                 else:
+                    estable.clear()
                     ui.banner(img, "NO SE DETECTA LA CARA")
 
                 frames += 1
@@ -72,9 +93,15 @@ def run(settings: Settings, make_tracker=None) -> None:
                     fps = 10.0 / max(now - t0, 1e-6)
                     t0 = now
 
+                if temblores:
+                    tj = float(np.median(temblores))
+                    linea_temblor = (f"temblor {tj:4.0f} px = "
+                                     f"{tj / PX_PER_DEG:4.2f}°")
+                else:
+                    linea_temblor = "temblor --"
                 ui.status_bar(img, [
                     f"suavizado={settings.smoother}  modelo={settings.model_name}  "
-                    f"{fps:4.1f} fps",
+                    f"{fps:4.1f} fps   {linea_temblor}",
                     f"mirada=({sample.x:4d},{sample.y:4d})  "
                     f"crudo=({sample.raw_x:5d},{sample.raw_y:5d})",
                     "ESC/Q salir   R punto crudo",

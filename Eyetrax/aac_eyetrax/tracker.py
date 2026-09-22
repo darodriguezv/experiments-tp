@@ -406,6 +406,40 @@ class GazeTracker:
         self.close()
 
 
+class MedianWindow:
+    """Mediana móvil de puntos, sobre una ventana de **tiempo**.
+
+    En segundos y no en cuadros porque los dos estimadores del proyecto corren
+    a velocidades distintas -EyeTrax a 26 fps, GazeFollower a 14- y una ventana
+    contada en cuadros significaría medio segundo en uno y un cuarto en el
+    otro.
+
+    Mediana y no promedio: el ruido de mirada tiene colas pesadas. Una sola
+    muestra disparada corre el promedio y no corre la mediana, y esas muestras
+    disparadas son justamente lo que hace saltar el cursor.
+    """
+
+    def __init__(self, window_s: float = 0.32) -> None:
+        self.window_s = window_s
+        self._points: deque = deque()
+
+    def clear(self) -> None:
+        self._points.clear()
+
+    def push(self, x: int, y: int, now: float | None = None) -> tuple[int, int]:
+        now = time.time() if now is None else now
+        self._points.append((now, x, y))
+        cutoff = now - self.window_s
+        while len(self._points) > 1 and self._points[0][0] < cutoff:
+            self._points.popleft()
+        xs = sorted(p[1] for p in self._points)
+        ys = sorted(p[2] for p in self._points)
+        mid = len(xs) // 2
+        if len(xs) % 2:
+            return xs[mid], ys[mid]
+        return (xs[mid - 1] + xs[mid]) // 2, (ys[mid - 1] + ys[mid]) // 2
+
+
 class DwellSelector:
     """Fires when the gaze rests on the same target long enough.
 
@@ -442,14 +476,14 @@ class DwellSelector:
         self.dwell = settings.dwell_ms / 1000.0
         self.refractory = settings.refractory_ms / 1000.0
         self.grace = settings.blink_grace_ms / 1000.0
-        self.window = settings.fixation_window_ms / 1000.0
+        self.window_s = settings.fixation_window_ms / 1000.0
         self.stick = settings.stick_margin_ratio
 
         self.target: object | None = None
         self._started_at = 0.0
         self._lost_at: float | None = None
         self._blocked_until = 0.0
-        self._points: deque = deque()
+        self.window = MedianWindow(self.window_s)
 
     def reset(self) -> None:
         self.target = None
@@ -463,22 +497,13 @@ class DwellSelector:
         self.reset()
         # La ventana también se vacía: después de cambiar de página, los puntos
         # de la página anterior describen una pantalla que ya no está.
-        self._points.clear()
+        self.window.clear()
 
     # ------------------------------------------------- fijación y pegado
 
     def feed(self, x: int, y: int, now: float) -> tuple[int, int]:
         """Agrega una muestra y devuelve el punto estable de la ventana."""
-        self._points.append((now, x, y))
-        cutoff = now - self.window
-        while len(self._points) > 1 and self._points[0][0] < cutoff:
-            self._points.popleft()
-        xs = sorted(p[1] for p in self._points)
-        ys = sorted(p[2] for p in self._points)
-        mid = len(xs) // 2
-        if len(xs) % 2:
-            return xs[mid], ys[mid]
-        return (xs[mid - 1] + xs[mid]) // 2, (ys[mid - 1] + ys[mid]) // 2
+        return self.window.push(x, y, now)
 
     def _still_held(self, point: tuple[int, int], bounds) -> bool:
         """¿La mediana sigue dentro de la celda sostenida, con margen?"""
