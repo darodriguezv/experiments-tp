@@ -152,7 +152,7 @@ def _settings(args) -> Settings:
 
 
 def _al_dia(settings, args) -> bool:
-    """Calibra al empezar. Es el arranque de sesión, no un trámite.
+    """Calibra al empezar. SIEMPRE, y no hay forma de saltearlo.
 
     La postura exacta de una calibración anterior no se reproduce: uno se
     sienta distinto, la silla cambia de altura, la pantalla se inclina. Como el
@@ -163,6 +163,10 @@ def _al_dia(settings, args) -> bool:
     Calibrar al empezar a usar el dispositivo es el modelo de uso previsto: lo
     mismo que hacen los rastreadores comerciales, y una vez por sesión no se
     parece en nada a una vez por frase.
+
+    No hay bandera para saltearla. La había, y se sacó a pedido: un atajo que
+    evita la calibración se termina usando, y entonces uno mide un modelo
+    entrenado para una postura que ya no tiene sin enterarse.
 
     **Diferencia con WebcamV1, que importa al comparar.** Allá las muestras de
     todas las sesiones se acumulan, así que cada calibración le agrega posturas
@@ -180,13 +184,9 @@ def _al_dia(settings, args) -> bool:
     """
     from aac_eyetrax import calibrate
 
-    if getattr(args, "skip_calibration", False):
-        print("[calibración] se reusa la guardada (--skip-calibration). "
-              "Si te sentaste distinto, el error va a ser sistemático.")
-        return True
     metodo = getattr(args, "method", None) or "9point"
     print(f"[calibración] recalibrando ({metodo}) antes de empezar "
-          f"(--skip-calibration para saltearla)")
+          f"(obligatoria: no hay forma de saltearla)")
     return calibrate.run(settings, metodo) is not None
 
 
@@ -226,10 +226,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
     p_pipe.add_argument("--fixation-ms", type=int, default=None,
                         help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
-    p_pipe.add_argument(
-        "--skip-calibration", action="store_true",
-        help="reutiliza models/gaze_model.pkl en vez de calibrar de nuevo",
-    )
     p_pipe.add_argument(
         "--no-accuracy", action="store_true",
         help="salta el paso de medición de precisión",
@@ -271,11 +267,9 @@ def main(argv: list[str] | None = None) -> int:
         help="segundos descartados al principio de cada punto",
     )
 
+    # Sin bandera para saltear la calibracion: ver `_al_dia`.
     for _p in (p_live, p_board, p_acc):
-        _p.add_argument('--skip-calibration', action='store_true',
-                        help="no recalibrar: usar la guardada tal cual. Por defecto se recalibra, porque la postura de una sesion anterior no se reproduce")
-        _p.add_argument('--method', choices=CALIBRATIONS,
-                        default='9point')
+        _p.add_argument('--method', choices=CALIBRATIONS, default='9point')
 
     args = parser.parse_args(argv)
 
@@ -298,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         return pipeline.run(
             settings,
             method=args.method,
-            skip_calibration=args.skip_calibration,
+            skip_calibration=False,
             run_accuracy=not args.no_accuracy,
         )
 

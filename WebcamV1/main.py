@@ -8,11 +8,11 @@
     run.cmd accuracy     # error en grados, comparable con Eyetrax
     run.cmd board        # el tablero por permanencia
 
-live, accuracy y board calibran antes de empezar: la postura exacta de una
-sesión anterior no se reproduce. Es el arranque de sesión previsto, no un
-trámite, así que van los 9 puntos completos. Las calibraciones se acumulan, de
-modo que cada sesión le agrega posturas al modelo. `--skip-calibration` la
-saltea; `--method 5point` la abrevia.
+TODO comando que use la mirada calibra antes de empezar, sin excepción y sin
+bandera para saltearlo: la postura exacta de una sesión anterior no se
+reproduce, y usar un modelo entrenado para otra postura falla en silencio. Van
+los 9 puntos completos; `--method 5point` abrevia. Las calibraciones se
+acumulan, así que cada sesión le agrega posturas al modelo.
 
 Mismo arnés que Eyetrax; lo único distinto es el estimador. Esa es la
 condición para que `accuracy` de los dos módulos sea comparable.
@@ -134,8 +134,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p_live = sub.add_parser("live", help="cursor de mirada en vivo")
     _common(p_live)
-    p_live.add_argument("--skip-calibration", action="store_true",
-                        help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
     p_live.add_argument("--method", default="9point",
                         choices=("5point", "9point", "13point"))
 
@@ -144,8 +142,6 @@ def main(argv: list[str] | None = None) -> int:
     p_acc.add_argument("--rows", type=int, default=3)
     p_acc.add_argument("--cols", type=int, default=3)
     p_acc.add_argument("--hold", type=float, default=2.0)
-    p_acc.add_argument("--skip-calibration", action="store_true",
-                       help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
     p_acc.add_argument("--method", default="9point",
                        choices=("5point", "9point", "13point"))
 
@@ -157,8 +153,6 @@ def main(argv: list[str] | None = None) -> int:
     p_board.add_argument("--fixation-ms", type=int, default=None,
                          help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
     p_board.add_argument("--no-speech", action="store_true")
-    p_board.add_argument("--skip-calibration", action="store_true",
-                         help="no recalibrar: usar la guardada tal cual. Por defecto se hace una puesta al dia corta, porque la postura de una calibracion anterior no se reproduce")
     p_board.add_argument("--method", default="9point",
                          choices=("5point", "9point", "13point"))
 
@@ -173,7 +167,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="cuánto se agranda la celda sostenida, como fracción de su tamaño (0 = sin pegado, el comportamiento viejo). Subilo si la permanencia se reinicia sola")
     p_pipe.add_argument("--fixation-ms", type=int, default=None,
                         help="ventana en ms sobre la que se toma la mediana para decidir la celda. Más larga estabiliza más pero tarda más en cambiar")
-    p_pipe.add_argument("--skip-calibration", action="store_true")
     p_pipe.add_argument("--no-accuracy", action="store_true")
 
     args = parser.parse_args(argv)
@@ -228,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if calibrate.run(settings, args.method, make) else 1
 
     def _al_dia() -> bool:
-        """Calibra al empezar. Es el arranque de sesión, no un trámite.
+        """Calibra al empezar. SIEMPRE, y no hay forma de saltearlo.
 
         La postura exacta de una calibración anterior **no se reproduce**: uno
         se sienta distinto, la silla cambia de altura, la pantalla se inclina.
@@ -246,14 +239,17 @@ def main(argv: list[str] | None = None) -> int:
         Encima las calibraciones se **acumulan**, así que cada sesión le agrega
         posturas a lo que el modelo ya sabía en vez de reemplazarlas.
 
-        Con `--skip-calibration` se usa la guardada tal cual, que sirve para
-        comparar dos configuraciones sin que la calibración cambie en el medio
-        - y para medir si lo acumulado ya alcanza sin recalibrar.
+        No hay bandera para saltearla. La habia, y se saco a pedido: un
+        atajo que evita la calibracion se termina usando, y entonces uno esta
+        midiendo un modelo entrenado para una postura que ya no tiene sin
+        enterarse. El costo de que no exista es que no se puede medir "cuanto
+        sirve lo acumulado sin recalibrar"; el costo de que exista es no saber
+        si lo que se midio vale. La segunda es peor.
+
+        Para usar una calibracion guardada tal cual -si alguna vez hace falta
+        para un experimento- hay que llamar al arnes directamente desde Python,
+        que es deliberadamente mas trabajo que escribir una bandera.
         """
-        if getattr(args, "skip_calibration", False):
-            print("[calibración] se reusa la guardada (--skip-calibration). "
-                  "Si te sentaste distinto, el error va a ser sistemático.")
-            return True
         metodo = getattr(args, "method", None) or "9point"
         print(f"[calibración] calibrando ({metodo}) antes de empezar "
               f"(--skip-calibration para saltearla, --method 5point para "
@@ -285,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         print(settings.describe_geometry(), "\n")
         return pipeline.run(
             settings, method=args.method,
-            skip_calibration=args.skip_calibration,
+            skip_calibration=False,   # siempre se calibra
             run_accuracy=not args.no_accuracy,
             make_tracker=make)
 

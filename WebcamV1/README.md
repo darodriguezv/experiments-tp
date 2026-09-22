@@ -146,19 +146,12 @@ vuelve tolerante.
 ```
 run.cmd calibrate --monitor 0            # suma a lo anterior
 run.cmd calibrate --monitor 0 --fresh    # descarta y empieza de cero
-run.cmd board --monitor 0 --skip-calibration   # usa lo acumulado tal cual
 ```
 
-La pregunta que esto vuelve medible: **¿cuántas sesiones hacen falta para que
-recalibrar deje de ser necesario?**
-
-```
-run.cmd accuracy --monitor 0                      # calibrando
-run.cmd accuracy --monitor 0 --skip-calibration   # con lo acumulado
-```
-
-La brecha entre esos dos números, sesión tras sesión, dice si la acumulación
-está funcionando. Si se cierra, el modelo se volvió tolerante a la postura.
+**No hay bandera para saltear la calibración.** La hubo y se sacó: un atajo que
+la evita se termina usando, y entonces uno mide un modelo entrenado para una
+postura que ya no tiene, sin enterarse. Se pierde poder medir «cuánto sirve lo
+acumulado sin recalibrar»; se gana saber que todo lo medido vale.
 
 ## Uso
 
