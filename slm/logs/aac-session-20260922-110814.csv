@@ -1,0 +1,5 @@
+t_since_start_s,event,label,gaze_x,gaze_y
+7.921,select,NECESITO,499,429
+9.959,select,AGUA,173,614
+12.978,select,HABLAR,1603,1073
+14.976,select,"DICHO:necesito agua, por favor",817,464

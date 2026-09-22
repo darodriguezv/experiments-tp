@@ -1,0 +1,12 @@
+t_since_start_s,event,label,gaze_x,gaze_y
+4.253,select,ME SIENTO,772,475
+9.129,select,BIEN,634,1079
+11.168,select,BIEN,740,872
+14.079,select,MAL,963,0
+25.777,select,BORRAR,896,1079
+28.677,select,BORRAR,1183,931
+30.504,select,LIMPIAR,1369,956
+36.728,select,NECESITO,486,426
+38.593,select,COMIDA,424,578
+41.218,select,HABLAR,1646,965
+47.597,select,DICHO:necesito comida,742,404

@@ -1,0 +1,14 @@
+t_since_start_s,event,label,gaze_x,gaze_y
+6.318,select,NECESITO,596,473
+8.174,select,BAÑO,956,612
+10.114,select,HABLAR,1626,993
+12.404,select,DICHO:necesito ir al baño,1000,465
+26.031,select,DOLOR,1280,724
+91.291,select,HABLAR,1756,837
+99.291,select,HABLAR,1624,1079
+101.144,select,HABLAR,1663,915
+103.009,select,HABLAR,1698,939
+107.427,select,HABLAR,1778,745
+109.438,select,HABLAR,1585,1079
+112.930,select,HABLAR,1347,1079
+345.879,select,AYUDA,1491,392
