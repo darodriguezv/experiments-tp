@@ -187,9 +187,9 @@ class OllamaBackend(Backend):
         self.keep_alive = keep_alive
         """Cuánto sigue el modelo en RAM tras la última petición.
 
-        Ollama usa 5 minutos por defecto y eso es demasiado poco para hablar:
-        cargar qwen2.5:3b cuesta 39 s medidos, así que una pausa de más de
-        cinco minutos hace que la frase siguiente tarde medio minuto. Para el
+        Ollama usa 5 minutos por defecto y es demasiado poco para hablar:
+        recargar qwen2.5:3b cuesta 4.3 s y el 7b 6.9 s, así que una pausa hace
+        que la frase siguiente se demore sin que nada lo explique. Para el
         tablero conviene `-1`, que lo deja cargado mientras Ollama viva."""
 
     # ------------------------------------------------------------- discovery

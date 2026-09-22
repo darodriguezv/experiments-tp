@@ -126,7 +126,8 @@ def _expand(state: State) -> None:
     variant = state.variant
     # keep_alive="-1": el modelo se queda en RAM mientras el tablero este
     # abierto. Con el default de 5 minutos de Ollama, una pausa hace que la
-    # frase siguiente pague 39 s de recarga - y puede ser la urgente.
+    # frase siguiente pague la recarga -4.3 s el 3b, 6.9 s el 7b- y puede ser
+    # la urgente.
     backend = backends.OllamaBackend(state.model, temperature=0.2,
                                      keep_alive="-1")
 

@@ -176,10 +176,11 @@ def run(settings: Settings, model: str | None = None,
     print(f"[tablero] {state.model} / {state.variant.variant}")
 
     # El modelo se calienta MIENTRAS la persona calibra. Medido: la primera
-    # llamada tarda 39 s -Ollama carga los pesos a RAM- y las siguientes 0.3.
-    # Sin esto, el primer HABLAR de cada sesión se cuelga más de medio minuto,
-    # que es exactamente el momento en que alguien concluye que no funciona. La
-    # calibración dura algo parecido, así que la espera sale gratis.
+    # llamada del día tarda 39 s -leer los pesos del disco- y 4.3 s cuando ya
+    # están en la caché del sistema; las siguientes, 0.25 s. Sin esto el primer
+    # HABLAR de cada sesión se cuelga, que es exactamente el momento en que
+    # alguien concluye que no funciona. La calibración dura más que eso, así
+    # que la espera sale gratis.
     threading.Thread(target=_warm_up, args=(state,), daemon=True).start()
 
     print("[tablero] la calibración es obligatoria y va primero.")
