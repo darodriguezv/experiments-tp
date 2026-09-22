@@ -557,6 +557,80 @@ def _guard_flag_reaches_the_metrics() -> str:
     return f"polaridad {sin} sin filtro -> {con} con filtro; el flag llega"
 
 
+def _gaze_board_is_wired() -> str:
+    """El tablero por mirada dibuja y responde, sin cámara ni pantalla.
+
+    Une tres módulos que hasta ahora se probaban por separado -el tablero, la
+    mirada y la expansión- así que un error de cableado entre ellos no lo
+    atrapaba ningún chequeo de los tres. Y es caro de descubrir en vivo: pasa
+    después de calibrar.
+
+    Se verifica la geometría de la pantalla de candidatos porque es nueva: las
+    franjas tienen que entrar en pantalla y no pisarse, o la permanencia
+    seleccionaría una mientras la barra avanza sobre otra.
+    """
+    import sys as _s
+    from pathlib import Path as _P
+
+    raiz = _P(__file__).resolve().parents[2]
+    for sib in ("RealsenseV1", "Eyetrax"):
+        if str(raiz / sib) not in _s.path:
+            _s.path.insert(0, str(raiz / sib))
+    try:
+        from aac_eyetrax.config import Settings as _Set
+        from aac_eyetrax.tracker import DwellSelector, GazeSample
+        from aac_realsense import board_layout, ui
+    except ImportError as exc:
+        return (f"sin el entorno de Eyetrax no se puede probar ({exc}); "
+                f"correlo con `gaze.cmd smoke`")
+
+    from . import demo, gaze_board
+
+    W, H = 1920, 1080
+    st = demo.State()
+    st.candidates = ["quiero agua", "necesito agua por favor", "agua"]
+
+    zones = gaze_board._candidate_zones(st, W, H)
+    assert len(zones) == len(st.candidates) + 1, "falta la franja de volver"
+    cajas = [z[2] for z in zones]
+    for x1, y1, x2, y2 in cajas:
+        assert 0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H, (x1, y1, x2, y2)
+    for i in range(len(cajas)):
+        for j in range(i + 1, len(cajas)):
+            a, b = cajas[i], cajas[j]
+            assert (a[3] <= b[1] or b[3] <= a[1]
+                    or a[2] <= b[0] or b[2] <= a[0]), f"se pisan: {a} {b}"
+
+    img = ui.canvas(W, H)
+    gaze_board._draw_candidates(img, st, zones, W, H, 0.5,
+                                f"say:{st.candidates[0]}")
+
+    tiles = board_layout.layout("core", W, H)
+    gaze_board._draw_board(ui.canvas(W, H), st, tiles, tiles[0].tile_id, 0.4,
+                           W, H)
+
+    class _L:
+        def selection(self, *a):
+            pass
+
+    d = DwellSelector(_Set())
+    st2 = demo.State()
+    agua = next(t for t in tiles if t.key.label == "AGUA")
+    _, _, _, exp = gaze_board._on_tile(st2, agua, "core", W, H, _L(),
+                                       GazeSample(ok=True), d)
+    assert st2.words == ["AGUA"] and not exp, (st2.words, exp)
+
+    # HABLAR con el mensaje vacío NO debe disparar al modelo: seria una llamada
+    # de varios segundos para expandir la nada.
+    st3 = demo.State()
+    hablar = next(t for t in tiles if t.key.label == "HABLAR")
+    _, _, _, exp_vacio = gaze_board._on_tile(st3, hablar, "core", W, H, _L(),
+                                             GazeSample(ok=True), d)
+    assert not exp_vacio, "HABLAR sin mensaje mandó a expandir"
+    return (f"{len(zones)} franjas sin solaparse, {len(tiles)} celdas, "
+            f"HABLAR vacío no llama al modelo")
+
+
 CHECKS = (
     ("el corpus carga y valida", _corpus_loads),
     ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
@@ -576,6 +650,7 @@ CHECKS = (
     ("la puerta de aptitud es estricta", _usable_gate_is_strict),
     ("--guard llega hasta las métricas", _guard_flag_reaches_the_metrics),
     ("extremo a extremo con modelo falso", _end_to_end_with_scripted_model),
+    ("el tablero por mirada está cableado", _gaze_board_is_wired),
     ("estado de Ollama", _ollama_status),
 )
 

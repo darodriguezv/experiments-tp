@@ -8,7 +8,8 @@
     python main.py run                  # la grilla completa -> results/run-*.jsonl
     python main.py report results/run-*.jsonl
     python main.py rescore results/run-*.jsonl   # re-mide sin volver a inferir
-    python main.py demo                 # el tablero clickeable, para probarlo a mano
+    python main.py gaze                 # el tablero POR MIRADA + expansión
+    python main.py demo                 # el mismo, clickeable con el mouse
 """
 
 from __future__ import annotations
@@ -81,6 +82,19 @@ def main(argv: list[str] | None = None) -> int:
                        choices=list(prompts.VARIANTS))
     p_try.add_argument("--input", required=True)
     p_try.add_argument("--temperature", type=float, default=0.2)
+
+    p_gaze = sub.add_parser(
+        "gaze",
+        help="el tablero POR MIRADA con la expansión enchufada: el "
+             "dispositivo completo")
+    p_gaze.add_argument("--model", default=None)
+    p_gaze.add_argument("--variant", default=None, choices=list(prompts.VARIANTS))
+    p_gaze.add_argument("--camera", type=int, default=0)
+    p_gaze.add_argument("--monitor", default="ask")
+    p_gaze.add_argument("--dwell", type=int, default=800)
+    p_gaze.add_argument("--stick", type=float, default=None)
+    p_gaze.add_argument("--fixation-ms", type=int, default=None)
+    p_gaze.add_argument("--no-speech", action="store_true")
 
     p_demo = sub.add_parser(
         "demo",
@@ -164,6 +178,33 @@ def main(argv: list[str] | None = None) -> int:
             if item.get("note"):
                 print(f"      » {item['note']}")
         return 0
+
+    if args.command == "gaze":
+        import sys as _sys
+        from pathlib import Path as _P
+
+        _sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "Eyetrax"))
+        from aac_eyetrax.config import Settings as _S
+        from aac_eyetrax.display import pick_screen
+
+        from aac_semantic import gaze_board
+
+        monitor = args.monitor
+        if str(monitor).lower() == "ask":
+            screen = pick_screen("¿En qué pantalla va a estar el tablero?")
+            if screen is None:
+                print("[cancelado] no se eligió pantalla.")
+                return 130
+            monitor = screen.index
+            print(f"[pantalla] {screen.label()}")
+        st = _S(monitor=monitor, camera_index=args.camera,
+                dwell_ms=args.dwell, speak=not args.no_speech)
+        if args.stick is not None:
+            st.stick_margin_ratio = args.stick
+        if args.fixation_ms is not None:
+            st.fixation_window_ms = args.fixation_ms
+        st.validate()
+        return gaze_board.run(st, model=args.model, variant=args.variant)
 
     if args.command == "demo":
         from aac_semantic import demo
