@@ -282,6 +282,7 @@ def _calibration_collects_and_fits() -> str:
             # Una postura estable durante toda la recoleccion, para poder
             # comprobar que la referencia sale de las muestras.
             self.pose_fija = _FakePose()
+            self.last_pose = None
 
             import gf_compat
 
@@ -299,14 +300,19 @@ def _calibration_collects_and_fits() -> str:
             self.calibration = SVRCalibration(model_save_path=carpeta)
             self.rng = np.random.default_rng(0)
 
-        @property
-        def last_pose(self):
-            return self.pose_fija
+        # `last_pose` es un atributo comun, no una propiedad que lo
+        # fabrique: simularlo fue lo que dejo pasar el bug de la referencia en
+        # ceros. Se refresca donde el codigo real lo refrescaria.
 
         def open_window(self, window):
             pass
 
         def features(self, frame):
+            # Refresca la pose, como hace el tracker real. Antes esto era una
+            # propiedad que la fabricaba sola, y esa comodidad fue justamente
+            # lo que dejo pasar el bug: el doble proveia la pieza que el codigo
+            # real no estaba llamando.
+            self.last_pose = self.pose_fija
             # Qué punto se está mostrando se deduce de cuántas muestras se
             # pidieron: el bucle pide exactamente `MUESTRAS` por objetivo.
             i = min(self.pedidas // MUESTRAS, len(objetivos) - 1)
@@ -362,6 +368,79 @@ def _calibration_collects_and_fits() -> str:
         f"no está recolectando lo que dice")
     return (f"9 puntos x {MUESTRAS} muestras, la SVR ajustó, y la "
             f"referencia salió de las muestras")
+
+
+def _features_refresh_the_pose() -> str:
+    """`features()` tiene que actualizar la pose, no solo `process()`.
+
+    Existe porque el chequeo que había NO atrapó el bug: su tracker falso
+    simulaba `last_pose`, que es exactamente el método que el código real no
+    estaba llamando. Un doble que provee la pieza que falta no prueba nada.
+
+    El bug: la calibración recolecta con `features()`, no con `process()`, así
+    que `last_pose` quedaba sin actualizar durante toda la recolección, las
+    poses se rellenaban con ceros y la referencia terminaba en (0,0,0). El
+    síntoma era que la pantalla declaraba «movido» sin haberse movido, porque
+    comparaba la postura real contra un origen que nadie ocupa nunca.
+
+    Por eso este chequeo usa el `WebcamTracker` de verdad sobre la cara
+    sintética: lo único que no se puede falsear es el camino real.
+    """
+    from synth_face import face
+
+    from aac_webcam.config import Settings
+    from aac_webcam.tracker import WebcamTracker
+
+    s = Settings()
+    s.check_position = False
+    with WebcamTracker(s) as tr:
+        frame = face()
+        assert tr.last_pose is None, "arrancó con una pose de la nada"
+        tr.features(frame)
+        pose_tras_features = tr.last_pose
+        tr.last_pose = None
+        tr.process(frame)
+        pose_tras_process = tr.last_pose
+
+    for nombre, pose in (("features", pose_tras_features),
+                         ("process", pose_tras_process)):
+        assert pose is not None, (
+            f"{nombre}() no actualizó la pose: la calibración recolecta con "
+            f"features(), así que la referencia saldría en ceros")
+        assert pose.eye_span > 0.0, f"{nombre}() dio una pose degenerada: {pose}"
+    return (f"features() y process() dejan la pose fresca "
+            f"(ojos {pose_tras_features.eye_span:.3f})")
+
+
+def _reference_rejects_nonsense() -> str:
+    """Una referencia degenerada no se guarda: es peor que no tener ninguna.
+
+    Con (0,0,0) guardado, la guía manda a una postura inalcanzable y todo lo
+    que la use queda en rojo para siempre - que es como se manifestó el bug.
+    """
+    from aac_webcam import calibration_ui
+
+    from aac_eyetrax.tracker import DEFAULT_POSE
+
+    class _T:
+        reference_pose = DEFAULT_POSE
+
+    t = _T()
+    calibration_ui._set_reference(t, np.zeros((10, 6), dtype=np.float32))
+    assert t.reference_pose is DEFAULT_POSE, (
+        "guardó una referencia en ceros y pisó la que había")
+
+    # Y tampoco se cuela una cara imposiblemente grande o fuera de cuadro.
+    for absurda in ([0.51, 0.46, 0.90, 0, 0, 0], [0.99, 0.46, 0.14, 0, 0, 0]):
+        calibration_ui._set_reference(
+            t, np.tile(np.array(absurda, dtype=np.float32), (10, 1)))
+        assert t.reference_pose is DEFAULT_POSE, f"aceptó {absurda}"
+
+    buenas = np.tile(np.array([0.51, 0.46, 0.14, 1.0, 0.08, 0.33],
+                              dtype=np.float32), (10, 1))
+    calibration_ui._set_reference(t, buenas)
+    assert getattr(t.reference_pose, "eye_span", 0) > 0.1, t.reference_pose
+    return "ceros y valores imposibles rechazados; una postura plausible sí"
 
 
 def _calibration_accumulates() -> str:
@@ -471,6 +550,8 @@ CHECKS = (
     ("el alineador expone los puntos", _alignment_exposes_landmarks),
     ("el parpadeo se detecta y se suelta", _blink_heuristic),
     ("la recolección de calibración funciona", _calibration_collects_and_fits),
+    ("features() refresca la pose", _features_refresh_the_pose),
+    ("una referencia absurda se rechaza", _reference_rejects_nonsense),
     ("recalibrar acumula en vez de reemplazar", _calibration_accumulates),
     ("la calibración persiste", _calibration_persists),
 )

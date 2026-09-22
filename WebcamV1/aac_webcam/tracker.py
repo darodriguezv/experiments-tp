@@ -311,8 +311,17 @@ class WebcamTracker:
         )
 
     def features(self, frame):
-        """Embedding y mirada cruda en cm, o None. Lo usa la calibración."""
+        """Embedding y mirada cruda en cm, o None. Lo usa la calibración.
+
+        Refresca `last_pose` igual que `process`, y no es un detalle: la
+        calibración recolecta con este método, no con `process`, así que sin
+        esta línea la pose quedaba sin actualizar durante TODA la recolección y
+        la referencia terminaba en ceros. El sintoma era que la pantalla
+        declaraba "movido" sin que uno se hubiera movido, porque comparaba la
+        postura real contra un origen que nadie ocupa nunca.
+        """
         face_info = self._face_info(frame)
+        self._remember_pose(frame, face_info)
         if not getattr(face_info, "can_gaze_estimation", False):
             return None
         gaze_info = self.estimator.detect(frame, face_info)

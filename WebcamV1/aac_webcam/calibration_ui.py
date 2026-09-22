@@ -122,10 +122,14 @@ def run(tracker, points: int = 9, fresh: bool = False) -> bool:
                 # despues preguntarle a los datos cuanto depende la precision
                 # de la postura, en vez de discutirlo.
                 pose = getattr(tracker, "last_pose", None)
-                poses_vistas.append(
-                    (pose.cx, pose.cy, pose.eye_span, pose.roll_deg,
-                     pose.yaw_ratio, pose.pitch_ratio) if pose
-                    else (0.0,) * 6)
+                if pose is not None:
+                    poses_vistas.append(
+                        (pose.cx, pose.cy, pose.eye_span, pose.roll_deg,
+                         pose.yaw_ratio, pose.pitch_ratio))
+                # Si no hay pose NO se rellena con ceros. Rellenar fue el bug:
+                # (0,0,0) no es "desconocido", es una postura concreta que
+                # nadie ocupa jamas, y la mediana de puros ceros producia una
+                # referencia imposible de alcanzar.
                 got += 1
             if got < settings.samples_per_point:
                 flojos.append(i + 1)
@@ -246,10 +250,20 @@ def _accumulate(tracker, X, y, poses, fresh: bool):
 def _set_reference(tracker, poses) -> None:
     """Fija la pose de referencia con la mediana de lo medido al calibrar."""
     if poses is None or len(poses) == 0:
+        print("[calibración] no se pudo medir la postura durante la "
+              "recolección; se conserva la de la pantalla de colocación.")
         return
     from aac_eyetrax.tracker import FacePose
 
     m = np.median(poses, axis=0)
+    if not (0.02 < float(m[2]) < 0.6) or not (0.05 < float(m[0]) < 0.95):
+        # Una referencia degenerada es peor que ninguna: manda a la persona a
+        # una postura inalcanzable y todo lo que la use queda en rojo para
+        # siempre. Antes que guardar eso, no se toca la que habia.
+        print(f"[calibración] la postura medida sale absurda "
+              f"(centro {m[0]:.2f}, ojos {m[2]:.3f}); no se usa como "
+              f"referencia.")
+        return
     antes = tracker.reference_pose
     tracker.reference_pose = FacePose(
         cx=float(m[0]), cy=float(m[1]), eye_span=float(m[2]),
