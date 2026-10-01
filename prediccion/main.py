@@ -1,5 +1,6 @@
 """Predicción personalizada para el tablero CAA.
 
+    python main.py perfil                # onboarding opcional de la persona
     python main.py demo                  # el tablero clickeable, para probarlo
     python main.py smoke                 # chequeos del instrumento
     python main.py sim                   # ahorro sobre el usuario sintético
@@ -70,6 +71,19 @@ def main(argv: list[str] | None = None) -> int:
                         help="dónde se guarda lo aprendido")
     p_demo.add_argument("--slots", type=int, default=5)
 
+    p_perfil = sub.add_parser(
+        "perfil",
+        help="onboarding opcional: quién es la persona, para que el tablero "
+             "no arranque en blanco")
+    p_perfil.add_argument("--perfil", default="mio.perfil.json")
+    p_perfil.add_argument("--model", default="mio.user.json")
+    p_perfil.add_argument("--sin-modelo", action="store_true",
+                          help="no pedirle sugerencias al SLM")
+    p_perfil.add_argument("--borrar", action="store_true",
+                          help="eliminar el perfil guardado")
+    p_perfil.add_argument("--ver", action="store_true",
+                          help="mostrar el perfil sin modificarlo")
+
     p_show = sub.add_parser("show", help="qué aprendió el modelo")
     p_show.add_argument("--model", required=True)
     p_show.add_argument("--limit", type=int, default=15)
@@ -137,6 +151,32 @@ def main(argv: list[str] | None = None) -> int:
         from aac_prediccion import demo
 
         return demo.run(model_path=args.model, slots=args.slots)
+
+    if args.command == "perfil":
+        from aac_prediccion.perfil import Perfil
+        from aac_prediccion import perfil_ui
+
+        ruta = Path(args.perfil)
+        if args.borrar:
+            if ruta.exists():
+                ruta.unlink()
+                print(f"[perfil] borrado {ruta}")
+            else:
+                print(f"[perfil] no hay nada en {ruta}")
+            print("  Nota: lo ya sembrado sigue en el modelo de usuario. "
+                  "Para quitarlo también, borrá ese archivo.")
+            return 0
+        if args.ver:
+            p = Perfil.load(ruta)
+            if p.vacio:
+                print(f"[perfil] vacío o inexistente: {ruta}")
+                return 0
+            print(f"[perfil] {ruta}")
+            print(f"  {p.resumen() or '(sin datos demográficos)'}")
+            print(f"  términos: {', '.join(p.terminos()) or '(ninguno)'}")
+            return 0
+        return perfil_ui.run(args.perfil, args.model,
+                             con_modelo=not args.sin_modelo)
 
     if args.command == "show":
         model = UserModel.load(args.model)

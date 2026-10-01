@@ -5,3 +5,4 @@ __pycache__/
 # Nunca al repositorio.
 *.user.json
 models/
+*.perfil.json

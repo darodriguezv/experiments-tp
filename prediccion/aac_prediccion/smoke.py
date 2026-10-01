@@ -329,6 +329,96 @@ def _demo_renders_headless() -> str:
             f"la mejor ahorró {prop.saving} y el contador coincide")
 
 
+def _perfil_rompe_el_arranque_en_frio() -> str:
+    """Sembrar el perfil tiene que ahorrar permanencias desde la primera frase.
+
+    El módulo arranca vacío a propósito, y eso hace que las primeras sesiones
+    no ahorren nada. Un perfil debería romper ese arranque en frío **sin
+    inventar evidencia**: no finge que la persona dijo algo, declara qué
+    vocabulario le corresponde.
+
+    Se mide lo que importa: decir el nombre de una hija deletreándolo contra
+    decirlo desde la franja. Si el ahorro no aparece, sembrar no sirvió de nada
+    y solo agregó celdas que leer.
+    """
+    from aac_prediccion.perfil import PESO_PERFIL, Perfil, sembrar
+    from aac_prediccion.predict import Predictor
+
+    p = Perfil(nombre="Ana", edad=61, profesion="maestra",
+               personas=["marta"], objetos=["radio"])
+
+    vacio = UserModel()
+    assert Predictor(vacio).propose([], "core") == [], (
+        "sin perfil debería arrancar sin proponer nada")
+
+    modelo = UserModel()
+    n = sembrar(modelo, p, ahora=1000.0)
+    assert n > 0, "no sembró ninguna frase"
+
+    props = Predictor(modelo).propose([], "core", now=1000.5)
+    etiquetas = [x.label for x in props]
+    assert any("marta" in e for e in etiquetas), (
+        f"el nombre sembrado no se ofrece: {etiquetas}")
+
+    # El ahorro, en permanencias reales: "marta" deletreada son 5 letras más el
+    # espacio más el cambio de página.
+    mejor = max((x for x in props if "marta" in x.label),
+                key=lambda x: x.saving)
+    assert mejor.saving >= 5, f"ahorra solo {mejor.saving}"
+
+    # Y lo que la persona diga de verdad tiene que ganarle a lo sembrado.
+    for _ in range(int(PESO_PERFIL) + 1):
+        modelo.observe(["quiero", "agua"], now=1001.0)
+    orden = [t for t, _ in modelo.phrase_completions((), now=1001.5, limit=9)]
+    assert orden and orden[0] == ["quiero", "agua"], (
+        f"lo sembrado le ganó al uso real: {orden[:2]}")
+    return (f"{n} frases sembradas; «marta» ahorra {mejor.saving} "
+            f"permanencias y el uso real le gana al perfil")
+
+
+def _perfil_no_siembra_salud() -> str:
+    """El filtro de sugerencias no deja pasar salud ni estado de ánimo.
+
+    Una frase sembrada se ofrece después **como si la persona la hubiera
+    dicho**. Sembrar "dolor" o "triste" desde un perfil pondría en su boca un
+    tema que nadie planteó, que es exactamente lo que el módulo entero trabaja
+    para que no pase. Esos términos sí aparecen cuando ella los escribe: la
+    diferencia es quién los dijo.
+    """
+    from aac_prediccion.perfil import _filtrar
+
+    # Una respuesta tipica del modelo: la mitad util, la mitad vetada.
+    crudo = chr(10).join([
+        "radio", "jardín", "dolor de espalda", "la medicación", "perro",
+        "se siente triste", "mate", "silla de ruedas", "bastón",
+        "ansiedad por las noches",
+    ])
+    salida = _filtrar(crudo)
+    assert "radio" in salida and "mate" in salida, salida
+    for prohibido in ("dolor", "medic", "triste", "ansiedad", "silla de ruedas"):
+        assert not any(prohibido in t for t in salida), (
+            f"pasó un término vetado ({prohibido}): {salida}")
+    return f"{len(salida)} términos aceptados, los de salud y ánimo descartados"
+
+
+def _perfil_persiste() -> str:
+    import tempfile
+
+    from aac_prediccion.perfil import Perfil
+
+    p = Perfil(nombre="Ana", edad=61, region="Rosario",
+               personas=["marta", "  "], intereses=["tango", "tango"])
+    with tempfile.TemporaryDirectory() as tmp:
+        ruta = Path(tmp) / "x.perfil.json"
+        p.save(ruta)
+        otra = Perfil.load(ruta)
+    assert otra.edad == 61 and otra.region == "Rosario"
+    # Vacíos y duplicados no deberían llegar a sembrarse.
+    assert otra.terminos() == ["marta", "tango"], otra.terminos()
+    assert Perfil.load(Path(tempfile.gettempdir()) / "no-existe.json").vacio
+    return "ida y vuelta por JSON; duplicados y vacíos descartados"
+
+
 CHECKS = (
     ("el costo del tablero es correcto", _board_costs_are_right),
     ("sin evidencia no hay predicción", _no_prediction_without_evidence),
@@ -342,6 +432,9 @@ CHECKS = (
     ("la deriva se sobrevive", _drift_is_survivable),
     ("las sesiones reales se parsean bien", _session_csv_round_trip),
     ("el demo dibuja y cuenta bien", _demo_renders_headless),
+    ("el perfil rompe el arranque en frío", _perfil_rompe_el_arranque_en_frio),
+    ("el perfil no siembra salud", _perfil_no_siembra_salud),
+    ("el perfil persiste", _perfil_persiste),
     ("el informe admite cuando no conviene", _report_is_honest_about_loss),
 )
 
