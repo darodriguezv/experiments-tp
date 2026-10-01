@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 models/*.pkl
 logs/*.csv
+models/headaware/

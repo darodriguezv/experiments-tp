@@ -698,6 +698,69 @@ def _diagnosis() -> str:
     return "sano, tránsito, bordes, entorno y temblor real distinguidos"
 
 
+def _headaware_sees_the_head() -> str:
+    """Las features base coinciden con eyetrax, y las de cabeza ven el movimiento.
+
+    Dos cosas en un chequeo, porque van juntas:
+
+    1. Las primeras 486 columnas tienen que ser **idénticas** a las de
+       `eyetrax.extract_features`. Acá se replica su normalización para evitar
+       una segunda pasada de MediaPipe -33 ms por cuadro- y una réplica que se
+       desvía en silencio convierte cualquier comparación entre los dos
+       estimadores en una comparación de dos cosas distintas.
+
+    2. Mover la cabeza NO puede cambiar las 486 de eyetrax y SÍ tiene que
+       cambiar las 6 nuevas. Esa asimetría es el diagnóstico entero del
+       problema que motivó el módulo: eyetrax centra en el punto medio de los
+       ojos y divide por la distancia interocular, así que la traslación y la
+       distancia se eliminan antes de llegar al regresor. Medido: trasladar la
+       cabeza un 5 % del ancho mueve sus features 2e-07, que es ruido de punto
+       flotante.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+    from eyetrax import GazeEstimator
+
+    from .headaware import BASE_DIM, FULL_DIM, features_from_landmarks
+
+    rng = np.random.default_rng(3)
+    pts = rng.normal(0.5, 0.08, (478, 3)).astype(np.float32)
+    pts[33] = [0.42, 0.45, 0.0]
+    pts[263] = [0.58, 0.45, 0.0]
+    pts[10] = [0.50, 0.28, 0.0]
+
+    est = GazeEstimator()
+    marco = np.zeros((720, 1280, 3), np.uint8)
+
+    def de_eyetrax(p):
+        lms = [SimpleNamespace(x=float(a), y=float(b), z=float(c)) for a, b, c in p]
+        est._face_landmarker.detect_for_video = (
+            lambda *a, **k: SimpleNamespace(face_landmarks=[lms]))
+        return est.extract_features(marco)[0]
+
+    try:
+        base, mio = de_eyetrax(pts), features_from_landmarks(pts)
+        assert len(mio) == FULL_DIM, (len(mio), FULL_DIM)
+        assert np.allclose(mio[:BASE_DIM], base, atol=1e-5), (
+            f"la réplica se desvió de eyetrax: "
+            f"{np.abs(mio[:BASE_DIM] - base).max():.2e}")
+
+        movido = pts.copy()
+        movido[:, 0] += 0.05
+        base_mov, mio_mov = de_eyetrax(movido), features_from_landmarks(movido)
+        ciego = float(np.abs(base_mov - base).max())
+        ve = float(np.abs(mio_mov[BASE_DIM:] - mio[BASE_DIM:]).max())
+        assert ciego < 1e-5, (
+            f"eyetrax reaccionó a la traslación ({ciego:.2e}): si dejó de ser "
+            f"ciega, este módulo ya no hace falta")
+        assert ve > 0.01, f"las de cabeza no vieron la traslación ({ve:.2e})"
+    finally:
+        est.close()
+    return (f"486 idénticas a eyetrax; al trasladar la cabeza eyetrax cambia "
+            f"{ciego:.0e} y las de cabeza {ve:.2f}")
+
+
 CHECKS = [
     ("versiones / numpy<2", _versions),
     ("tamaño de pantalla", _screen),
@@ -707,6 +770,7 @@ CHECKS = [
     ("modelos de regresión", _regression),
     ("guardado del modelo", _persistence),
     ("suavizadores", _smoothers),
+    ("el estimador consciente de cabeza", _headaware_sees_the_head),
     ("selección por permanencia", _dwell),
     ("la permanencia sobrevive al temblor", _dwell_survives_jitter),
     ("geometría del tablero", _board),

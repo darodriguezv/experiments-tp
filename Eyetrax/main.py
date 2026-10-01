@@ -42,6 +42,12 @@ from aac_eyetrax.config import CALIBRATIONS, GAZE_MODELS, SMOOTHERS, Settings  #
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--head-aware", action="store_true",
+        help="usar el estimador que SI ve dónde está la cabeza. eyetrax "
+             "normaliza la traslación y la distancia hasta eliminarlas, así "
+             "que calibrar en una posición y moverse unos centímetros degrada "
+             "mucho. Calibra en 3 posturas y tolera el movimiento")
     p.add_argument("--camera", type=int, default=0, help="índice de la cámara (por defecto 0)")
     p.add_argument(
         "--monitor", default="ask",
@@ -151,6 +157,20 @@ def _settings(args) -> Settings:
     return s
 
 
+def _make_tracker(args):
+    """Qué estimador usar. `--head-aware` cambia uno solo de los dos.
+
+    Pasa por la misma costura `make_tracker` que usa WebcamV1, así que los tres
+    estimadores -eyetrax, eyetrax+cabeza, gazefollower- se miden con el mismo
+    arnés y sus números de `accuracy` son comparables entre sí.
+    """
+    if not getattr(args, "head_aware", False):
+        return None
+    from aac_eyetrax import headaware
+
+    return headaware.make
+
+
 def _al_dia(settings, args) -> bool:
     """Calibra al empezar. SIEMPRE, y no hay forma de saltearlo.
 
@@ -187,7 +207,7 @@ def _al_dia(settings, args) -> bool:
     metodo = getattr(args, "method", None) or "9point"
     print(f"[calibración] recalibrando ({metodo}) antes de empezar "
           f"(obligatoria: no hay forma de saltearla)")
-    return calibrate.run(settings, metodo) is not None
+    return calibrate.run(settings, metodo, _make_tracker(args)) is not None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -294,19 +314,20 @@ def main(argv: list[str] | None = None) -> int:
             method=args.method,
             skip_calibration=False,
             run_accuracy=not args.no_accuracy,
-        )
+            make_tracker=_make_tracker(args))
 
     if args.command == "calibrate":
         from aac_eyetrax import calibrate
 
-        return 0 if calibrate.run(settings, args.method) else 1
+        return 0 if calibrate.run(settings, args.method,
+                                  _make_tracker(args)) else 1
 
     if args.command == "live":
         from aac_eyetrax import live_gaze
 
         if not _al_dia(settings, args):
             return 1
-        live_gaze.run(settings)
+        live_gaze.run(settings, _make_tracker(args))
         return 0
 
     if args.command == "board":
@@ -314,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if not _al_dia(settings, args):
             return 1
-        aac_board.run(settings)
+        aac_board.run(settings, _make_tracker(args))
         return 0
 
     if args.command == "accuracy":
@@ -322,7 +343,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if not _al_dia(settings, args):
             return 1
-        stats = accuracy.run(settings, args.rows, args.cols, args.hold, args.settle)
+        stats = accuracy.run(settings, args.rows, args.cols, args.hold, args.settle,
+                             make_tracker=_make_tracker(args))
         return 0 if stats else 1
 
     parser.error(f"unknown command {args.command}")
