@@ -91,7 +91,10 @@ def _draw_message(
     img, msg: Message, screen_w: int, screen_h: int, reserve_right: int = 0
 ) -> None:
     x1, y1, x2, y2 = message_area(screen_w, screen_h)
-    ui.rounded_rect(img, x1 + 10, y1 + 10, x2 - 10, y2 - 6, (30, 30, 34))
+    ui.rounded_rect(img, x1 + 14, y1 + 12, x2 - 14, y2 - 8, ui.SURFACE, 18)
+    # Una línea de acento a la izquierda: ancla la mirada donde empieza el
+    # texto, que con mensajes cortos queda perdido en el medio de la barra.
+    ui.rounded_rect(img, x1 + 14, y1 + 12, x1 + 20, y2 - 8, ui.ACCENT, 3)
 
     text = msg.text.upper() or "..."
     # Keep the tail visible when the sentence outgrows the bar, and stay clear
@@ -107,40 +110,67 @@ def _draw_message(
     )
 
 
+def page_text_size(tiles) -> int:
+    """El tamaño de letra de TODA la página, decidido por la etiqueta más larga.
+
+    Se calcula una vez por página y no por celda. Ver `ui.uniform_text_size`
+    para por qué: tamaños desparejos rompen el barrido visual de la grilla.
+    """
+    if not tiles:
+        return 28
+    ancho = min(t.x2 - t.x1 for t in tiles) - 30
+    alto = min(t.y2 - t.y1 for t in tiles) - 30
+    return ui.uniform_text_size(tuple(t.key.label for t in tiles), ancho, alto)
+
+
 @lru_cache(maxsize=256)
-def _tile_bitmap(label: str, kind: str, w: int, h: int, hot: bool):
+def _tile_bitmap(label: str, kind: str, w: int, h: int, hot: bool,
+                 size: int, emite: bool = False):
     """Pre-render a whole tile (background + label) once.
 
     A tile's appearance only depends on these five things, and a board redraws
     the same 25-35 tiles every frame. Compositing text per frame cost ~35 ms at
     1080p; caching the finished bitmap turns each tile into a plain memcpy.
     """
-    base = ui.TILE_HOT if hot else ui.TILE
-    if kind == ACTION:
-        base = tuple(min(255, c + 14) for c in base)
+    # Las de control van un escalón más abajo que las de vocabulario: son
+    # herramientas, no son lo que la persona quiere decir. Antes iban MÁS
+    # claras y el ojo las encontraba primero, que es exactamente al revés.
+    if hot:
+        base = ui.TILE_HOT
+    elif emite:
+        base = ui.TILE_COMMIT
+    else:
+        base = ui.TILE_ACTION if kind == ACTION else ui.TILE
 
     bmp = np.empty((h, w, 3), dtype=np.uint8)
     bmp[:] = ui.BG
-    ui.rounded_rect(bmp, 0, 0, w - 1, h - 1, base)
+    ui.tile(bmp, 0, 0, w - 1, h - 1, base, edge=ui.EDGE)
 
-    size = ui.fit_text_size(label, w - 24, h - 24, bold=True)
-    color = ui.ACCENT if kind == ACTION else ui.TEXT
+    if emite:
+        color = ui.ACCENT
+    else:
+        color = ui.TEXT_DIM if kind == ACTION else ui.TEXT
     ui.text_center(bmp, label, w // 2, h // 2, size, color, bold=True)
     return bmp
 
 
-def _draw_tile(img, tile: Tile, progress: float, hot: bool) -> None:
+def _draw_tile(img, tile: Tile, progress: float, hot: bool,
+               size: int) -> None:
     w, h = tile.x2 - tile.x1, tile.y2 - tile.y1
     if w <= 0 or h <= 0:
         return
     img[tile.y1:tile.y2, tile.x1:tile.x2] = _tile_bitmap(
-        tile.key.label, tile.key.kind, w, h, hot
+        tile.key.label, tile.key.kind, w, h, hot, size,
+        tile.key.payload == "speak",
     )
 
     if progress > 0:
-        ui.progress_border(
-            img, tile.x1, tile.y1, tile.x2, tile.y2, progress, ui.ACCENT, 6
-        )
+        # Doble señal: el borde dice cuánto falta, el relleno dice que el
+        # sistema te sigue a vos. Ver `ui.tile`.
+        ui.tile(img, tile.x1, tile.y1, tile.x2, tile.y2, ui.TILE_HOT,
+                edge=ui.EDGE, progress=progress, accent=ui.ACCENT)
+        ui.text_center(img, tile.key.label, (tile.x1 + tile.x2) // 2,
+                       (tile.y1 + tile.y2) // 2, size, ui.TEXT, bold=True)
 
 
 def run(settings: Settings, make_tracker=None) -> None:
@@ -162,6 +192,7 @@ def run(settings: Settings, make_tracker=None) -> None:
         page = "core"
         tiles = layout(page, w, h)
         by_id = {t.tile_id: t for t in tiles}
+        tam = page_text_size(tiles)
 
         msg = Message()
         dwell = DwellSelector(settings)
@@ -221,6 +252,7 @@ def run(settings: Settings, make_tracker=None) -> None:
                             page = action.split(":", 1)[1]
                             tiles = layout(page, w, h)
                             by_id = {t.tile_id: t for t in tiles}
+                            tam = page_text_size(tiles)
                             # Don't let the gaze that switched pages immediately
                             # trigger whatever tile now sits under it.
                             dwell.block(0.7)
@@ -244,7 +276,8 @@ def run(settings: Settings, make_tracker=None) -> None:
                 )
                 for t in tiles:
                     is_hot = hovered is not None and t.tile_id == hovered.tile_id
-                    _draw_tile(img, t, progress if is_hot else 0.0, is_hot)
+                    _draw_tile(img, t, progress if is_hot else 0.0,
+                               is_hot, tam)
 
                 deriva = getattr(tracker, "pose_drift", None)
                 deriva = deriva() if deriva else None

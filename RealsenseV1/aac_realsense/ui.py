@@ -16,18 +16,61 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# BGR (OpenCV order)
-BG = (18, 18, 20)
-TILE = (46, 46, 52)
-TILE_HOT = (92, 78, 40)
-TILE_FIRED = (60, 130, 70)
-TEXT = (235, 235, 240)
-TEXT_DIM = (150, 150, 158)
-ACCENT = (90, 200, 255)
-GAZE = (70, 90, 255)
-RAW = (110, 110, 110)
-WARN = (60, 60, 220)
-GOOD = (90, 200, 120)
+# Paleta, en BGR porque es el orden de OpenCV.
+#
+# Clínica y sobria, no de videojuego. El naranja ámbar que había antes
+# (ACCENT = RGB 255,200,90) gritaba en una pantalla que alguien va a mirar
+# fijo durante horas, y el ámbar sobre fondo oscuro es justo la combinación
+# que más fatiga a la vista en uso prolongado.
+#
+# El reemplazo es un verde azulado de instrumental médico sobre pizarra
+# profunda. Tres razones, no solo gusto:
+#
+# * **Fatiga.** El fondo no es negro puro sino pizarra: el contraste extremo
+#   entre texto blanco y negro absoluto cansa más que un fondo apenas
+#   levantado.
+# * **Una sola familia de tono.** Fondo, superficie y celdas comparten el
+#   mismo azul desaturado y solo cambian de luminosidad, así que la jerarquía
+#   se lee por brillo y el color queda libre para significar algo.
+# * **El color significa.** Verde azulado = el sistema te está siguiendo.
+#   Verde salvia = se confirmó. Coral = algo anda mal. Nada más usa color, así
+#   que cuando aparece, importa.
+BG = (27, 20, 14)
+"""Pizarra profunda. El lienzo de todo."""
+
+SURFACE = (42, 32, 23)
+"""Paneles sobre el fondo: la barra del mensaje, las tarjetas."""
+
+TILE = (56, 43, 31)
+TILE_ACTION = (47, 36, 26)
+"""Las celdas de control van un escalón más abajo que las de vocabulario: son
+herramientas, no son lo que la persona quiere decir."""
+
+TILE_COMMIT = (62, 56, 34)
+"""La celda que EMITE (HABLAR) no es una herramienta más.
+
+Las demás acciones -borrar, espacio, cambiar de página- corrigen y navegan: se
+hunden a propósito para que el ojo encuentre primero el vocabulario. HABLAR
+hace lo contrario: termina el enunciado y lo dice en voz alta. Hundirla al
+mismo nivel que BORRAR la volvía lo más difícil de encontrar siendo lo más
+buscado, y una permanencia perdida buscándola es una frase que no se dijo."""
+
+TILE_HOT = (84, 66, 45)
+TILE_FIRED = (86, 92, 46)
+EDGE = (88, 70, 52)
+"""Borde sutil de cada celda. Las separa sin dibujar una grilla, que sería
+ruido visual en una pantalla que ya tiene treinta elementos."""
+
+TEXT = (246, 240, 233)
+TEXT_DIM = (165, 149, 132)
+
+ACCENT = (190, 182, 94)
+"""Verde azulado clínico. El único color que marca «acá está pasando algo»."""
+
+GAZE = (227, 200, 126)
+RAW = (124, 110, 94)
+WARN = (118, 123, 214)
+GOOD = (147, 184, 122)
 
 _FONT_DIR = Path("C:/Windows/Fonts")
 _REGULAR = ("segoeui.ttf", "arial.ttf", "calibri.ttf", "tahoma.ttf", "verdana.ttf")
@@ -125,26 +168,94 @@ def fit_text_size(
 # --------------------------------------------------------------------- shapes
 
 
+@lru_cache(maxsize=32)
+def uniform_text_size(labels: tuple, box_w: int, box_h: int,
+                      bold: bool = True, cap: int = 96) -> int:
+    """Un solo tamaño de letra para todas las celdas de una página.
+
+    Ajustar cada etiqueta a su celda por separado -que es lo que hacía antes-
+    deja «SÍ» gigante al lado de «MEDICINA» diminuta. Se ve amateur, pero lo
+    importante es que **rompe el barrido visual**: con tamaños desparejos el ojo
+    salta a la palabra más grande en vez de recorrer la grilla, y en un tablero
+    que se maneja con la mirada eso es un costo real, no estético.
+
+    Se toma el tamaño más grande que entra en TODAS. Lo manda la etiqueta más
+    larga, que es como debe ser: si no entra la peor, no entra la página.
+    """
+    return min(fit_text_size(l, box_w, box_h, bold=bold, cap=cap)
+               for l in labels)
+
+
 def canvas(w: int, h: int):
     img = np.empty((h, w, 3), dtype=np.uint8)
     img[:] = BG
     return img
 
 
+def _rounded_poly(x1, y1, x2, y2, radius: int):
+    """El contorno del rectángulo redondeado, como polígono."""
+    r = max(0, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+    if r == 0:
+        return np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], np.int32)
+    # En sentido HORARIO y arrancando arriba a la izquierda. El orden importa:
+    # `progress_border` recorre este mismo polígono, así que el orden de los
+    # arcos decide por dónde empieza a llenarse el borde. Antes arrancaba en la
+    # esquina inferior derecha y giraba al revés, de modo que una permanencia
+    # recién empezada se veía como un trazo suelto en el borde de abajo -justo
+    # donde nadie está mirando- mientras el docstring afirmaba lo contrario.
+    pts = []
+    for cx, cy, a0 in ((x1 + r, y1 + r, 180), (x2 - r, y1 + r, 270),
+                       (x2 - r, y2 - r, 0), (x1 + r, y2 - r, 90)):
+        pts.extend(cv2.ellipse2Poly((cx, cy), (r, r), 0, a0, a0 + 90, 6))
+    return np.array(pts, np.int32)
+
+
 def rounded_rect(img, x1, y1, x2, y2, color, radius: int = 14, thickness: int = -1):
-    """Filled or outlined rectangle with rounded corners."""
-    radius = max(0, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+    """Rectángulo redondeado, relleno o de contorno, con antialiasing real.
+
+    La versión anterior componía el relleno con dos rectángulos y cuatro
+    círculos. Es rápido y deja las esquinas dentadas, porque `cv2.rectangle`
+    rellenado no admite antialiasing. En una pantalla con treinta celdas esos
+    bordes escalonados son lo primero que delata que la interfaz está hecha a
+    mano.
+
+    Con `fillPoly` sobre el contorno y `LINE_AA` se pagan unos microsegundos
+    más y las celdas dejan de verse como un prototipo.
+    """
+    poly = _rounded_poly(x1, y1, x2, y2, radius)
     if thickness < 0:
-        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
-        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
-        for cx, cy in ((x1 + radius, y1 + radius), (x2 - radius, y1 + radius),
-                       (x1 + radius, y2 - radius), (x2 - radius, y2 - radius)):
-            cv2.circle(img, (cx, cy), radius, color, -1)
+        cv2.fillPoly(img, [poly], color, cv2.LINE_AA)
     else:
-        cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
+        cv2.polylines(img, [poly], True, color, thickness, cv2.LINE_AA)
 
 
-def progress_border(img, x1, y1, x2, y2, progress: float, color, thickness: int = 6):
+def tile(img, x1, y1, x2, y2, base, *, edge=None, radius: int = 16,
+         progress: float = 0.0, accent=None):
+    """Una celda del tablero: relleno, borde sutil y avance de permanencia.
+
+    El avance se muestra de **dos formas a la vez**, y es deliberado: el borde
+    que se completa dice cuánto falta, y el relleno que se aclara dice que el
+    sistema te está mirando *a vos*. Con solo el borde, alguien que mira el
+    centro de la celda -que es lo que uno hace- percibe el progreso por el
+    rabillo del ojo; con solo el relleno no se sabe cuánto queda.
+    """
+    rounded_rect(img, x1, y1, x2, y2, base, radius)
+    if progress > 0 and accent is not None:
+        # El relleno se acerca al acento proporcionalmente, sin llegar nunca:
+        # si la celda terminara del color del acento, el borde completo dejaría
+        # de distinguirse del fondo de la celda justo en el instante que más
+        # importa.
+        k = 0.30 * min(1.0, progress)
+        mezcla = tuple(int(b + (a - b) * k) for b, a in zip(base, accent))
+        rounded_rect(img, x1, y1, x2, y2, mezcla, radius)
+    if edge is not None:
+        rounded_rect(img, x1, y1, x2, y2, edge, radius, thickness=1)
+    if progress > 0 and accent is not None:
+        progress_border(img, x1, y1, x2, y2, progress, accent, 5, radius)
+
+
+def progress_border(img, x1, y1, x2, y2, progress: float, color,
+                    thickness: int = 6, radius: int = 16):
     """Border filling clockwise from the top-left as progress -> 1.
 
     Reads better than a spinner on a rectangular tile: the user sees exactly how
@@ -154,26 +265,46 @@ def progress_border(img, x1, y1, x2, y2, progress: float, color, thickness: int 
     if progress <= 0:
         return
 
-    w, h = x2 - x1, y2 - y1
-    remaining = 2 * (w + h) * progress
-    segments = [
-        ((x1, y1), (x2, y1), w),
-        ((x2, y1), (x2, y2), h),
-        ((x2, y2), (x1, y2), w),
-        ((x1, y2), (x1, y1), h),
-    ]
-    for (sx, sy), (ex, ey), length in segments:
-        if remaining <= 0:
+    # Se recorre el MISMO contorno redondeado que dibuja la celda, así el trazo
+    # sigue las esquinas en vez de cortarlas. Con el rectángulo recto de antes,
+    # el avance se despegaba del borde justo en las esquinas y parecía un
+    # error de dibujo.
+    # Metido hacia adentro media pincelada: un trazo centrado en el contorno
+    # se derrama por fuera de la celda y se mete en el espacio de la vecina,
+    # que es exactamente la celda que no hay que sugerir.
+    adentro = thickness // 2
+    poly = _rounded_poly(x1 + adentro, y1 + adentro,
+                         x2 - adentro, y2 - adentro, radius)
+    pts = np.vstack([poly, poly[:1]])
+    tramos = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    objetivo = float(tramos.sum()) * progress
+
+    acumulado = 0.0
+    for i, largo in enumerate(tramos):
+        if acumulado >= objetivo:
             break
-        frac = min(1.0, remaining / length)
-        px = int(sx + (ex - sx) * frac)
-        py = int(sy + (ey - sy) * frac)
-        cv2.line(img, (sx, sy), (px, py), color, thickness, cv2.LINE_AA)
-        remaining -= length
+        a, b = pts[i], pts[i + 1]
+        if acumulado + largo <= objetivo:
+            fin = b
+        else:
+            t = (objetivo - acumulado) / max(largo, 1e-6)
+            fin = a + (b - a) * t
+        cv2.line(img, tuple(a.astype(int)), tuple(fin.astype(int)),
+                 color, thickness, cv2.LINE_AA)
+        acumulado += largo
 
 
 def gaze_cursor(img, x: int, y: int, color=GAZE, radius: int = 16):
-    cv2.circle(img, (x, y), radius, color, 3, cv2.LINE_AA)
+    """El punto donde el sistema cree que está mirando.
+
+    Va perfilado en oscuro porque cae encima de la etiqueta de la celda -el
+    centro de la celda es justamente donde uno mira- y un aro claro sobre una
+    letra clara se confunde con la letra. El perfil cuesta dos circunferencias
+    más por cuadro y hace que el cursor se lea sobre cualquier fondo.
+    """
+    cv2.circle(img, (x, y), radius, BG, 5, cv2.LINE_AA)
+    cv2.circle(img, (x, y), radius, color, 2, cv2.LINE_AA)
+    cv2.circle(img, (x, y), 4, BG, -1, cv2.LINE_AA)
     cv2.circle(img, (x, y), 3, color, -1, cv2.LINE_AA)
 
 

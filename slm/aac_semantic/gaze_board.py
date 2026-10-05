@@ -134,26 +134,39 @@ def _draw_candidates(img, state, zones, w: int, h: int, progress: float,
                         f"T={state.temperature}   mire una opción para decirla",
                    w // 2, int(h * 0.145), 26, ui.TEXT_DIM)
 
+    # Un solo tamaño para las frases: son alternativas de lo MISMO, y mostrarlas
+    # a tamaños distintos insinúa una jerarquía que no existe. La más larga
+    # manda, que es la única que puede no entrar.
+    frases = [(t, z) for k, t, z in zones if k != "back"]
+    tam = ui.uniform_text_size(
+        tuple(t for t, _ in frases),
+        min(z[2] - z[0] for _, z in frases) - 220,
+        min(z[3] - z[1] for _, z in frases) - 30,
+        cap=44,
+    ) if frases else 34
+
     for kind, texto, (x1, y1, x2, y2) in zones:
         es_literal = texto.strip().lower() == telegrafico.lower()
         clave = f"{kind}:{texto}"
         caliente = clave == activa
         if kind == "back":
-            ui.rounded_rect(img, x1, y1, x2, y2, (52, 44, 44))
+            ui.tile(img, x1, y1, x2, y2,
+                    ui.TILE_HOT if caliente else ui.TILE_ACTION, edge=ui.EDGE,
+                    progress=progress if caliente else 0.0, accent=ui.ACCENT)
             ui.text_center(img, "VOLVER AL TABLERO", (x1 + x2) // 2,
-                           (y1 + y2) // 2, 34, ui.TEXT, bold=True)
+                           (y1 + y2) // 2, 34, ui.TEXT_DIM, bold=True)
         else:
-            ui.rounded_rect(img, x1, y1, x2, y2,
-                            (44, 44, 50) if es_literal else ui.TILE)
-            size = ui.fit_text_size(texto, x2 - x1 - 220, y2 - y1 - 30,
-                                    bold=not es_literal, cap=44)
-            ui.text_center(img, texto, (x1 + x2) // 2, (y1 + y2) // 2, size,
+            ui.tile(img, x1, y1, x2, y2,
+                    ui.TILE_HOT if caliente else
+                    (ui.TILE_ACTION if es_literal else ui.TILE),
+                    edge=ui.EDGE,
+                    progress=progress if caliente else 0.0, accent=ui.ACCENT)
+            ui.text_center(img, texto, (x1 + x2) // 2, (y1 + y2) // 2, tam,
                            ui.TEXT_DIM if es_literal else ui.TEXT,
                            bold=not es_literal)
             if es_literal:
                 ui.text_at(img, "literal", x1 + 18, y1 + 10, 18, ui.TEXT_DIM)
-        if caliente and progress > 0:
-            ui.progress_border(img, x1, y1, x2, y2, progress, ui.ACCENT, 6)
+
 
 
 def run(settings: Settings, model: str | None = None,
@@ -291,29 +304,50 @@ def run(settings: Settings, model: str | None = None,
     return 0
 
 
+def _tam_pagina(tiles) -> int:
+    """Un solo tamaño de letra para toda la grilla.
+
+    Ajustar cada etiqueta a su celda deja «SÍ» gigante al lado de «MEDICINA»
+    diminuta: el ojo salta a la palabra más grande en vez de recorrer la
+    grilla, y acá la grilla se recorre con la mirada. Ver `ui.uniform_text_size`.
+    """
+    if not tiles:
+        return 28
+    return ui.uniform_text_size(
+        tuple(t.key.label for t in tiles),
+        min(t.x2 - t.x1 for t in tiles) - 26,
+        min(t.y2 - t.y1 for t in tiles) - 26,
+    )
+
+
 def _draw_board(img, state, tiles, activa, progress: float, w: int,
                 h: int) -> None:
     with state.lock:
         texto = state.telegraphic.upper() or "MIRE LAS CELDAS PARA ARMAR UNA FRASE"
         vacio = not state.words
-    ui.rounded_rect(img, 12, 10, w - 13, int(h * 0.145), (30, 30, 34))
-    size = ui.fit_text_size(texto, w - 90, int(h * 0.09), bold=True, cap=54)
+    ui.rounded_rect(img, 16, 12, w - 17, int(h * 0.145), ui.SURFACE, 20)
+    ui.rounded_rect(img, 16, 12, 23, int(h * 0.145), ui.ACCENT, 3)
+    size = ui.fit_text_size(texto, w - 110, int(h * 0.085), bold=True, cap=54)
     ui.text_center(img, texto, w // 2, int(h * 0.078), size,
                    ui.TEXT_DIM if vacio else ui.TEXT, bold=True)
 
     for tile in tiles:
         caliente = tile.tile_id == activa
-        ui.rounded_rect(img, tile.x1, tile.y1, tile.x2, tile.y2,
-                        ui.TILE_HOT if caliente else ui.TILE)
-        s = ui.fit_text_size(tile.key.label, tile.x2 - tile.x1 - 20,
-                             tile.y2 - tile.y1 - 20, bold=True)
+        accion = tile.key.kind == board_layout.ACTION
+        emite = tile.key.payload == "speak"
+        if caliente:
+            base = ui.TILE_HOT
+        elif emite:
+            base = ui.TILE_COMMIT
+        else:
+            base = ui.TILE_ACTION if accion else ui.TILE
+        ui.tile(img, tile.x1, tile.y1, tile.x2, tile.y2, base, edge=ui.EDGE,
+                progress=progress if caliente else 0.0, accent=ui.ACCENT)
         ui.text_center(img, tile.key.label, (tile.x1 + tile.x2) // 2,
-                       (tile.y1 + tile.y2) // 2, s,
-                       ui.ACCENT if tile.key.kind == board_layout.ACTION
-                       else ui.TEXT, bold=True)
-        if caliente and progress > 0:
-            ui.progress_border(img, tile.x1, tile.y1, tile.x2, tile.y2,
-                               progress, ui.ACCENT, 6)
+                       (tile.y1 + tile.y2) // 2, _tam_pagina(tiles),
+                       ui.ACCENT if (emite and not caliente) else
+                       (ui.TEXT if (caliente or not accion) else ui.TEXT_DIM),
+                       bold=True)
 
 
 def _on_tile(state, tile, page: str, w: int, h: int, log, sample, dwell):

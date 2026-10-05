@@ -378,12 +378,21 @@ def _vocabulary() -> str:
     # Con acentos las etiquetas son más anchas: hay que verificar que igual entran.
     from . import ui
 
-    for tile in layout("core", 1920, 1080):
-        size = ui.fit_text_size(tile.key.label, tile.x2 - tile.x1 - 24,
-                                tile.y2 - tile.y1 - 24, bold=True)
-        tw, _ = ui.text_size(tile.key.label, size, bold=True)
-        assert tw <= tile.x2 - tile.x1 - 24, f"{tile.key.label!r} no entra en la celda"
-    return f"{len(labels)} etiquetas en español, todas entran en su celda"
+    # El tablero usa UN tamaño para toda la página, no uno por celda: medir
+    # cada etiqueta con su propio ajuste comprobaría algo que ya no se dibuja.
+    from .aac_board import page_text_size
+
+    for pagina in ("core", "abc"):
+        tiles = layout(pagina, 1920, 1080)
+        tam = page_text_size(tiles)
+        for tile in tiles:
+            tw, th = ui.text_size(tile.key.label, tam, bold=True)
+            assert tw <= tile.x2 - tile.x1 - 30, (
+                f"{tile.key.label!r} no entra en la celda de {pagina}")
+            assert th <= tile.y2 - tile.y1 - 30, (
+                f"{tile.key.label!r} no entra de alto en {pagina}")
+    return (f"{len(labels)} etiquetas en español; un solo tamaño por página "
+            f"y todas entran")
 
 
 def _synth_face(roll_deg=0.0, yaw=0.0, pitch=0.60, span=0.16, cx=0.5, cy=0.42,
@@ -535,11 +544,14 @@ def _tile_cache() -> str:
     from .aac_board import _tile_bitmap
     from .board_layout import layout
 
+    from .aac_board import page_text_size
+
     _tile_bitmap.cache_clear()
     tiles = layout("core", 1920, 1080)
+    tam = page_text_size(tiles)
     for tile in tiles:
         w, h = tile.x2 - tile.x1, tile.y2 - tile.y1
-        bmp = _tile_bitmap(tile.key.label, tile.key.kind, w, h, False)
+        bmp = _tile_bitmap(tile.key.label, tile.key.kind, w, h, False, tam)
         assert bmp.shape == (h, w, 3), f"celda {tile.tile_id}: {bmp.shape} != {(h, w, 3)}"
     info = _tile_bitmap.cache_info()
     assert info.hits > 0 or info.currsize > 0
