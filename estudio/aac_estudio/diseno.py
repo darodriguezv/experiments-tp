@@ -193,10 +193,10 @@ def informe_balance(n: int) -> str:
         out.append(f"  son {b['n_exacto_mas_cercano'] - n} sesión(es) más.")
     out.append("")
     out.append("  Asignación:")
-    out.append(f"    {'part':>5}  {'1ro':<26}{'2do':<26}{'3ro':<26}")
+    out.append(f"    {'part':>5}  {'1ro':<30}{'2do':<30}{'3ro':<30}")
     for a in plan(n):
         celdas = "".join(
-            "{} (F{})".format(NOMBRES[c], s).ljust(26)
+            "{} (F{})".format(NOMBRES[c], s).ljust(30)
             for c, s in zip(a.secuencia, a.conjuntos))
         out.append(f"    {a.participante:>5}  {celdas}")
     return "\n".join(out) + "\n"
