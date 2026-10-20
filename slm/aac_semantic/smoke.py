@@ -715,6 +715,17 @@ def _guard_protects_doubt() -> str:
     return "SI NO y TAL VEZ protegidos; sí/no solos descartados"
 
 
+def _decision_checks():
+    """Los chequeos de la tabla que decide, en su propio archivo.
+
+    Viven aparte porque prueban una cosa distinta: no si las métricas miden
+    bien, sino si el CRITERIO que elige el modelo está bien aplicado.
+    """
+    from .smoke_decision import CHECKS as _c
+
+    return _c
+
+
 CHECKS = (
     ("el corpus carga y valida", _corpus_loads),
     ("las referencias se reconocen a sí mismas", _references_pass_their_own_test),
@@ -738,7 +749,8 @@ CHECKS = (
     ("extremo a extremo con modelo falso", _end_to_end_with_scripted_model),
     ("el tablero por mirada está cableado", _gaze_board_is_wired),
     ("estado de Ollama", _ollama_status),
-)
+) + _decision_checks()
+
 
 
 def run() -> int:

@@ -93,6 +93,20 @@ CANDIDATE_MODELS: dict[str, dict] = {
                "0.5b/1.5b/3b, así que extiende la curva de escala a un punto "
                "más sin cambiar ninguna otra variable",
     },
+    "qwen2.5:3b-instruct-q8_0": {
+        "size_gb": 3.3, "params": "3B", "license": "Qwen Research",
+        "why": "el MISMO 3b con el doble de bits por peso. Aísla la "
+               "cuantización: todo lo demás -pesos, receta, tamaño- es "
+               "idéntico, así que cualquier diferencia es el redondeo",
+    },
+    "qwen2.5:7b-instruct-q8_0": {
+        "size_gb": 8.1, "params": "7B", "license": "Apache-2.0",
+        "why": "la única hipótesis que queda viva para el déficit de variedad "
+               "del 7b. Se refutaron tres (muestreo determinista, decodificado "
+               "restringido a JSON, entradas cortas); si el q8 tampoco lo "
+               "explica, el mecanismo sigue sin identificarse y hay que "
+               "decirlo así",
+    },
     "llama3.2:1b": {
         "size_gb": 1.3, "params": "1B", "license": "Llama 3.2",
         "why": "segunda familia al mismo tamaño; Llama 3.2 declara español "

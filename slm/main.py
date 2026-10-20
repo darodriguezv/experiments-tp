@@ -8,6 +8,8 @@
     python main.py run                  # la grilla completa -> results/run-*.jsonl
     python main.py report results/run-*.jsonl
     python main.py rescore results/run-*.jsonl   # re-mide sin volver a inferir
+    python main.py footprint             # disco/RAM/recarga medidos acá
+    python main.py decide results/run-*.jsonl --footprint results/footprint-*.jsonl
     python main.py gaze                 # el tablero POR MIRADA + expansión
     python main.py demo                 # el mismo, clickeable con el mouse
 """
@@ -140,6 +142,32 @@ def main(argv: list[str] | None = None) -> int:
                 help="aplicar el filtro determinista de polaridad antes de "
                      "medir. Compará con y sin: la diferencia es exactamente "
                      "lo que aporta el filtro, sobre las mismas respuestas")
+
+    p_fp = sub.add_parser(
+        "footprint",
+        help="mide disco, RAM, recarga y tokens/s de cada modelo EN ESTA "
+             "máquina (los size_gb de CANDIDATE_MODELS son declarados, no "
+             "medidos)")
+    p_fp.add_argument("--models", nargs="+", default=None,
+                      help=f"por defecto: {' '.join(DEFAULT_MODELS)}")
+    p_fp.add_argument("--repeat", type=int, default=5,
+                      help="llamadas calientes por modelo para la mediana")
+    p_fp.add_argument("--out", default=None,
+                      help="dónde guardar el JSONL (por defecto "
+                           "results/footprint-<fecha>.jsonl)")
+
+    p_dec = sub.add_parser(
+        "decide",
+        help="la tabla que decide: calidad + costo + licencia, con el "
+             "criterio aplicado y el ganador nombrado")
+    p_dec.add_argument("run", help="ruta o glob de results/run-*.jsonl")
+    p_dec.add_argument("--footprint", default=None,
+                       help="JSONL de `footprint`. Sin esto, los tamaños son "
+                            "los DECLARADOS y la tabla lo marca con ~")
+    p_dec.add_argument("--max-latency", type=float, default=4.0)
+    p_dec.add_argument("--rescore", action="store_true",
+                       help="re-medir con las métricas actuales antes de "
+                            "decidir, en vez de usar los puntajes guardados")
 
     args = parser.parse_args(argv)
 
@@ -279,6 +307,37 @@ def main(argv: list[str] | None = None) -> int:
         scores = runner.load_scores(path)
         print()
         print(report.full_report(scores, args.max_latency))
+        return 0
+
+    if args.command == "footprint":
+        import time as _time
+        from aac_semantic import footprint as _fp
+
+        modelos = args.models or DEFAULT_MODELS
+        print(f"Midiendo {len(modelos)} modelo(s). Cada uno se DESCARGA de RAM "
+              f"primero\npara cronometrar la recarga, así que esto tarda.\n")
+        fps = _fp.measure_all(modelos, repeticiones=args.repeat)
+        print()
+        print(_fp.table(fps))
+        destino = args.out or (
+            f"results/footprint-{_time.strftime('%Y%m%d-%H%M%S')}.jsonl")
+        print(f"  guardado -> {_fp.save(fps, destino)}")
+        return 0
+
+    if args.command == "decide":
+        from aac_semantic import decision
+        from aac_semantic import footprint as _fp
+
+        path = _resolve_run(args.run)
+        if args.rescore:
+            scores = runner.rescore(path, runner.load_corpus())
+        else:
+            scores = runner.load_scores(path)
+        fps = _fp.load(_resolve_run(args.footprint)) if args.footprint else None
+        print(f"[decide] {len(scores)} respuestas de {path.name}"
+              + (f", costo de {args.footprint}" if args.footprint
+                 else ", SIN medición de costo") + "\n")
+        print(decision.informe(scores, fps, args.max_latency))
         return 0
 
     if args.command in ("report", "rescore"):
