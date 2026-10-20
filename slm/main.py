@@ -319,8 +319,13 @@ def main(argv: list[str] | None = None) -> int:
         fps = _fp.measure_all(modelos, repeticiones=args.repeat)
         print()
         print(_fp.table(fps))
+        # Contra `runner.RESULTS` y no contra el directorio actual: `run` ya
+        # resuelve así, y una ruta relativa cruda hacía que corriendo desde la
+        # raíz del repo el archivo cayera en `experiments/results/` mientras
+        # las corridas iban a `slm/results/`. Después `decide --footprint`
+        # no lo encontraba, que es como apareció.
         destino = args.out or (
-            f"results/footprint-{_time.strftime('%Y%m%d-%H%M%S')}.jsonl")
+            runner.RESULTS / f"footprint-{_time.strftime('%Y%m%d-%H%M%S')}.jsonl")
         print(f"  guardado -> {_fp.save(fps, destino)}")
         return 0
 
