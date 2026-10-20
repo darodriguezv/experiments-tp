@@ -1,0 +1,9 @@
+# Datos de personas. No van al repositorio, ni siquiera siendo números.
+#
+# Acá no se guardan nombres -ver sesion.py- pero sí queda el recorrido completo
+# de alguien: a qué hora vino, cuánto tardó en cada frase, qué se equivocó. Con
+# diez participantes y una fecha, eso es reidentificable para cualquiera que
+# haya estado en la sala.
+datos/
+__pycache__/
+*.pyc

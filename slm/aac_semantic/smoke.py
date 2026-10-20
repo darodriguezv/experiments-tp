@@ -637,25 +637,57 @@ def _gaze_board_is_wired() -> str:
                            W, H)
 
     class _L:
-        def selection(self, *a):
-            pass
+        def __init__(self):
+            self.filas = []
+
+        def selection(self, label, *a):
+            self.filas.append(label)
 
     d = DwellSelector(_Set())
     st2 = demo.State()
     agua = next(t for t in tiles if t.key.label == "AGUA")
-    _, _, _, exp = gaze_board._on_tile(st2, agua, "core", W, H, _L(),
-                                       GazeSample(ok=True), d)
-    assert st2.words == ["AGUA"] and not exp, (st2.words, exp)
+    _, _, _, exp, dijo = gaze_board._on_tile(st2, agua, "core", W, H, _L(),
+                                             GazeSample(ok=True), d)
+    assert st2.words == ["AGUA"] and not exp and not dijo, (st2.words, exp)
 
     # HABLAR con el mensaje vacío NO debe disparar al modelo: seria una llamada
     # de varios segundos para expandir la nada.
     st3 = demo.State()
     hablar = next(t for t in tiles if t.key.label == "HABLAR")
-    _, _, _, exp_vacio = gaze_board._on_tile(st3, hablar, "core", W, H, _L(),
-                                             GazeSample(ok=True), d)
+    _, _, _, exp_vacio, _ = gaze_board._on_tile(st3, hablar, "core", W, H,
+                                                _L(), GazeSample(ok=True), d)
     assert not exp_vacio, "HABLAR sin mensaje mandó a expandir"
+
+    # Línea de base del estudio: sin modelo, HABLAR dice el literal y NO abre
+    # la pantalla de candidatos. Si abriera, la condición de deletreo tendría
+    # la función que justamente debe no tener.
+    st4 = demo.State()
+    st4.words = ["AGUA"]
+    log4 = _L()
+    _, _, _, exp4, dijo4 = gaze_board._on_tile(
+        st4, hablar, "core", W, H, log4, GazeSample(ok=True), d,
+        usar_modelo=False)
+    assert dijo4 and not exp4, "sin modelo igual abrió candidatos"
+    assert any(f.startswith("DICHO:") for f in log4.filas), (
+        f"no registró el enunciado: {log4.filas}")
+    assert not st4.words, "no limpió el mensaje después de decirlo"
+
+    # El guion avanza de tarea con cada enunciado y corta al agotarse.
+    script = gaze_board._Guion([("A1", "Tiene sed."), ("A2", "Llame a Marta.")])
+    assert "1/2" in script.banda() and "Tiene sed" in script.banda()
+    log5 = _L()
+    assert not gaze_board._avanzar(script, log5), "cortó antes de tiempo"
+    assert "2/2" in script.banda()
+    assert gaze_board._avanzar(script, log5), "no cortó al terminar"
+    assert "BLOQUE:fin" in log5.filas and "TAREA:A2" in log5.filas, log5.filas
+
+    # Sin guion, avanzar no hace nada: el tablero suelto sigue andando igual.
+    assert not gaze_board._avanzar(gaze_board._Guion(None), _L())
+
+    gaze_board._draw_board(ui.canvas(W, H), st, tiles, None, 0.0, W, H,
+                           "1/6   Tiene sed.")
     return (f"{len(zones)} franjas sin solaparse, {len(tiles)} celdas, "
-            f"HABLAR vacío no llama al modelo")
+            f"HABLAR vacío no llama al modelo, guion avanza y corta")
 
 
 def _guard_accepts_spelled_synonyms() -> str:

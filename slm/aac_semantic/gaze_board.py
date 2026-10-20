@@ -169,16 +169,56 @@ def _draw_candidates(img, state, zones, w: int, h: int, progress: float,
 
 
 
+class _Guion:
+    """Las tareas que se le van pidiendo, cuando el tablero corre en un estudio.
+
+    Vive acá y no en el módulo del estudio porque la frontera de una tarea es
+    un evento del tablero -la persona tocó HABLAR- y medirla desde afuera
+    obligaría a adivinar ese instante desde el reloj del conductor, que corre
+    en otro proceso. El límite de la tarea lo marca quien lo ve.
+    """
+
+    def __init__(self, tareas: list[tuple[str, str]] | None):
+        self.tareas = list(tareas or [])
+        self.i = 0
+
+    @property
+    def activa(self) -> tuple[str, str] | None:
+        return self.tareas[self.i] if self.i < len(self.tareas) else None
+
+    @property
+    def terminado(self) -> bool:
+        return bool(self.tareas) and self.i >= len(self.tareas)
+
+    def avanzar(self) -> None:
+        self.i += 1
+
+    def banda(self) -> str:
+        """La línea que se le muestra. Vacía si no hay estudio corriendo."""
+        act = self.activa
+        if act is None:
+            return ""
+        return f"{self.i + 1}/{len(self.tareas)}   {act[1]}"
+
+
 def run(settings: Settings, model: str | None = None,
         variant: str | None = None, temperature: float = 0.2,
-        seed: int | None = 7) -> int:
-    """Abre el tablero. Calibra primero, siempre."""
+        seed: int | None = 7, guion: list[tuple[str, str]] | None = None,
+        expandir: bool = True, contexto: str = "",
+        pagina_inicial: str = "core") -> int:
+    """Abre el tablero. Calibra primero, siempre.
+
+    `guion` convierte el tablero en un bloque de estudio: una lista de
+    (id, pista) que se van pidiendo de a una y terminan la sesión al agotarse.
+    `expandir=False` apaga el SLM y hace que HABLAR diga literalmente lo que se
+    escribió, que es la condición de línea de base.
+    """
     probe = backends_probe()
     if probe:
         print(probe)
         return 1
 
-    state = demo.State(temperature=temperature, seed=seed)
+    state = demo.State(temperature=temperature, seed=seed, contexto=contexto)
     if model:
         if model not in demo.MODELS:
             print(f"{model} no está en la lista: {', '.join(demo.MODELS)}")
@@ -216,12 +256,15 @@ def run(settings: Settings, model: str | None = None,
         ) is None:
             return 130
 
-        page = "core"
+        page = pagina_inicial
         tiles = board_layout.layout(page, w, h)
         by_id = {t.tile_id: t for t in tiles}
         dwell = DwellSelector(settings)
         log = _Log(settings.log_session)
         mostrando = False
+        script = _Guion(guion)
+        if script.activa:
+            log.selection(f"TAREA:{script.activa[0]}", 0, 0)
 
         tracker.open_window(WINDOW)
         try:
@@ -257,7 +300,8 @@ def run(settings: Settings, model: str | None = None,
                                          dwell.target)
                         if fired is not None:
                             kind, _, texto = fired.partition(":")
-                            if kind == "say" and texto:
+                            dijo = kind == "say" and bool(texto)
+                            if dijo:
                                 tts.speak(texto)
                                 log.selection(f"DICHO:{texto}",
                                               sample.x, sample.y)
@@ -266,6 +310,8 @@ def run(settings: Settings, model: str | None = None,
                                 state.words.clear()
                             mostrando = False
                             dwell.block(0.8)
+                            if dijo and _avanzar(script, log):
+                                break
                     else:
                         progress, fired, stable = dwell.step(
                             sample,
@@ -276,13 +322,15 @@ def run(settings: Settings, model: str | None = None,
                                          else (t.x1, t.y1, t.x2, t.y2))(
                                 by_id.get(tid)))
                         _draw_board(img, state, tiles, dwell.target, progress,
-                                    w, h)
+                                    w, h, script.banda())
                         if fired is not None:
-                            page, tiles, by_id, expandir = _on_tile(
+                            page, tiles, by_id, mostrar, dijo = _on_tile(
                                 state, by_id[fired], page, w, h, log,
-                                sample, dwell)
-                            if expandir:
+                                sample, dwell, usar_modelo=expandir)
+                            if mostrar:
                                 mostrando = True
+                            if dijo and _avanzar(script, log):
+                                break
 
                     if sample.ok:
                         if stable:
@@ -321,14 +369,23 @@ def _tam_pagina(tiles) -> int:
 
 
 def _draw_board(img, state, tiles, activa, progress: float, w: int,
-                h: int) -> None:
+                h: int, tarea: str = "") -> None:
     with state.lock:
         texto = state.telegraphic.upper() or "MIRE LAS CELDAS PARA ARMAR UNA FRASE"
         vacio = not state.words
     ui.rounded_rect(img, 16, 12, w - 17, int(h * 0.145), ui.SURFACE, 20)
     ui.rounded_rect(img, 16, 12, 23, int(h * 0.145), ui.ACCENT, 3)
-    size = ui.fit_text_size(texto, w - 110, int(h * 0.085), bold=True, cap=54)
-    ui.text_center(img, texto, w // 2, int(h * 0.078), size,
+
+    if tarea:
+        # Con guion, el panel se parte: arriba lo que hay que decir, abajo lo
+        # que se lleva escrito. La consigna tiene que estar a la vista todo el
+        # tiempo: si hay que acordarse de memoria, el estudio mide memoria.
+        ui.text_center(img, tarea, w // 2, int(h * 0.042), 30, ui.ACCENT)
+        y_msg, alto_msg = int(h * 0.105), int(h * 0.055)
+    else:
+        y_msg, alto_msg = int(h * 0.078), int(h * 0.085)
+    size = ui.fit_text_size(texto, w - 110, alto_msg, bold=True, cap=54)
+    ui.text_center(img, texto, w // 2, y_msg, size,
                    ui.TEXT_DIM if vacio else ui.TEXT, bold=True)
 
     for tile in tiles:
@@ -350,11 +407,34 @@ def _draw_board(img, state, tiles, activa, progress: float, w: int,
                        bold=True)
 
 
-def _on_tile(state, tile, page: str, w: int, h: int, log, sample, dwell):
-    """Aplica una selección. Devuelve (página, celdas, índice, expandir)."""
+def _avanzar(script: "_Guion", log) -> bool:
+    """Pasa a la tarea siguiente. Devuelve True si el bloque terminó.
+
+    Sin guion no hace nada y devuelve False, así el tablero suelto sigue
+    funcionando igual: la persona dice una frase y sigue usándolo.
+    """
+    if not script.tareas:
+        return False
+    script.avanzar()
+    if script.terminado:
+        log.selection("BLOQUE:fin", 0, 0)
+        return True
+    log.selection(f"TAREA:{script.activa[0]}", 0, 0)
+    return False
+
+
+def _on_tile(state, tile, page: str, w: int, h: int, log, sample, dwell,
+             usar_modelo: bool = True):
+    """Aplica una selección.
+
+    Devuelve (página, celdas, índice, mostrar_candidatos, dijo). `dijo` es
+    verdadero cuando la frase ya salió por el parlante sin pasar por el modelo,
+    que es la condición de línea de base del estudio.
+    """
     key = tile.key
     log.selection(key.label, sample.x, sample.y)
     expandir = False
+    dijo = False
 
     if key.kind in (board_layout.WORD, board_layout.LETTER):
         with state.lock:
@@ -372,18 +452,30 @@ def _on_tile(state, tile, page: str, w: int, h: int, log, sample, dwell):
         with state.lock:
             state.words.clear()
     elif key.payload == "speak":
-        with state.lock:
-            hay = bool(state.words)
+        if not usar_modelo:
+            # Línea de base: lo que se escribió es lo que se dice. Sin pantalla
+            # de candidatos, porque elegir entre opciones es justamente la
+            # función que esta condición existe para NO tener.
+            with state.lock:
+                texto = state.telegraphic.strip()
+                state.words.clear()
+            if texto:
+                tts.speak(texto)
+                log.selection(f"DICHO:{texto}", sample.x, sample.y)
+                dijo = True
+        else:
+            with state.lock:
+                hay = bool(state.words)
+                if hay:
+                    state.thinking = True
+                    state.candidates.clear()
             if hay:
-                state.thinking = True
-                state.candidates.clear()
-        if hay:
-            threading.Thread(target=demo._expand, args=(state,),
-                             daemon=True).start()
-            expandir = True
+                threading.Thread(target=demo._expand, args=(state,),
+                                 daemon=True).start()
+                expandir = True
 
     tiles = board_layout.layout(page, w, h)
-    return page, tiles, {t.tile_id: t for t in tiles}, expandir
+    return page, tiles, {t.tile_id: t for t in tiles}, expandir, dijo
 
 
 def _warm_up(state) -> None:

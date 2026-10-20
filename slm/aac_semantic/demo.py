@@ -95,6 +95,14 @@ class State:
     model_i: int = 0
     variant_name: str = DEFAULT_VARIANT
 
+    contexto: str = ""
+    """Quién es la persona que usa el tablero, para el prompt.
+
+    Vacío en el uso normal. El estudio lo llena en la condición
+    contextualizada, y la diferencia entre llenarlo y no llenarlo ES la
+    variable independiente de esa comparación: todo lo demás -modelo, prompt,
+    temperatura, tablero- queda idéntico."""
+
     candidates: list[str] = field(default_factory=list)
     thinking: bool = False
     latency_s: float = 0.0
@@ -142,7 +150,15 @@ def _expand(state: State) -> None:
                                      temperature=state.temperature,
                                      seed=state.seed, keep_alive="-1")
 
-    completion = backend.complete(variant.system, variant.user(telegraphic),
+    # El contexto va al final del system, no del user: el user es la entrada
+    # telegráfica y nada más. Mezclarlos haría que el modelo trate los datos de
+    # la persona como parte de lo que quiso decir, que es justo el error que el
+    # filtro de invención después castiga.
+    system = variant.system
+    if state.contexto:
+        system = (f"{system}\n\nSobre quien usa el tablero:\n"
+                  f"{state.contexto}")
+    completion = backend.complete(system, variant.user(telegraphic),
                                   json_mode=variant.json_mode)
     candidates, fmt = prompts.parse_candidates(completion.text)
 
