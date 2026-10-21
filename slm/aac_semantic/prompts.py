@@ -95,6 +95,20 @@ class Prompt:
         return f"entrada: {telegraphic}"
 
 
+_CUERPO_ES = """Qué puede hacer sola y qué no:
+
+La ELA le paralizó el cuerpo. No puede moverse, incorporarse, acomodarse, darse vuelta ni alcanzar nada. Para cualquier cosa física depende de quien la cuida.
+
+Por eso, cuando nombra una parte del cuerpo, una postura o un objeto de la habitación, casi siempre está PIDIENDO QUE ALGUIEN LO HAGA, no contando lo que va a hacer ella:
+
+MOVER BRAZO es "quiero que me muevan el brazo" o "movéme el brazo", no "quiero mover el brazo".
+SENTAR es "quiero que me sienten" o "sentáme", no "me voy a sentar".
+ALMOHADA es "quiero la almohada" o "acomodáme la almohada".
+NO MOVER es "no me muevas", no "no quiero moverme".
+
+Eso no contradice hablar en primera persona: sigue siendo ella la que habla, pero de algo que otro tiene que hacer."""
+
+
 def _v0() -> Prompt:
     """Bare instruction. The floor.
 
@@ -410,9 +424,59 @@ def _v9() -> Prompt:
     )
 
 
+def _v10() -> Prompt:
+    """+ qué puede y qué no puede hacer con su cuerpo.
+
+    Sale de una falla medida y concentrada: sobre los 133 ítems, la etiqueta
+    `postura` daba **1 acierto de 12** con qwen2.5:7b, la peor del corpus por
+    lejos. Mirando las salidas, el patrón era siempre el mismo:
+
+        MOVER BRAZO -> "quiero mover el brazo"   (esperado: "que me muevan")
+        SENTAR      -> "me quiero sentar"        (esperado: "que me sienten")
+        NO MOVER    -> "no quiero moverme"       (esperado: "no me muevas")
+
+    El modelo no estaba inventando ni perdiendo polaridad: producía primera
+    persona ACTIVA, que es exactamente lo que la regla 4 le pide. El problema
+    es que para alguien que no puede mover el brazo, "quiero mover el brazo"
+    no es una frase útil - necesita que OTRO se lo mueva, y nada en el prompt
+    decía que no pudiera hacerlo ella.
+
+    Va como INFORMACIÓN y no como regla nueve, que es la distinción que la
+    ablación de este módulo ya midió dos veces: el glosario -información- subió
+    el recall, y las reglas en prosa de v7 lo bajaron. Se le dice qué puede y
+    qué no puede hacer su cuerpo, y se deja que el modelo saque la conclusión.
+    """
+    base = _v4()
+    return Prompt(
+        variant="v10-cuerpo",
+        adds="qué puede y qué no puede hacer con su cuerpo",
+        system=base.system.replace(
+            _EXAMPLES_ES, _CUERPO_ES + chr(10) * 2 + _EXAMPLES_ES, 1),
+        json_mode=True,
+    )
+
+
+def _v11() -> Prompt:
+    """v10 sobre la base del glosario, para saber si se suman o se pisan.
+
+    v10 cuelga de v4 y el glosario de v6. Si las dos ayudan por separado pero
+    juntas no suman, es que estaban arreglando el mismo fallo por caminos
+    distintos, y eso es tan informativo como la mejora.
+    """
+    base = _v6()
+    return Prompt(
+        variant="v11-cuerpo-glosario",
+        adds="cuerpo + glosario",
+        system=base.system.replace(
+            _EXAMPLES_ES, _CUERPO_ES + chr(10) * 2 + _EXAMPLES_ES, 1),
+        json_mode=True,
+    )
+
+
 VARIANTS: dict[str, Prompt] = {
     p.variant: p for p in (_v0(), _v1(), _v2(), _v3(), _v4(), _v5(),
-                           _v6(), _v7(), _v8(), _v9())
+                           _v6(), _v7(), _v8(), _v9(),
+                           _v10(), _v11())
 }
 
 

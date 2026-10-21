@@ -245,6 +245,48 @@ def _no_prompt_corpus_contamination() -> str:
             f"{len(corpus_inputs)} ítems del corpus")
 
 
+def _cliticos_no_rompen_el_match() -> str:
+    """El español pega el pronombre al verbo y eso rompía el F1 de tokens.
+
+    `quiero acostarme` y `me quiero acostar` son la MISMA frase y daban 0.40,
+    bien por debajo del umbral de 0.75. La etiqueta `postura` del corpus daba
+    1 acierto de 12 con el mejor modelo casi enteramente por esto: todos sus
+    ítems usan verbos pronominales.
+    """
+    mismas = [
+        ("quiero acostarme", "me quiero acostar"),
+        ("quiero sentarme", "quiero sentar me"),
+        ("movéme el brazo", "mové me el brazo"),
+        ("acomodáme la almohada", "acomodá me la almohada"),
+    ]
+    for a, b in mismas:
+        f1 = metrics.token_f1(a, b)
+        assert f1 >= 0.95, f"{a!r} vs {b!r} da {f1:.2f}, deberían ser iguales"
+
+    # Lo que NO se maneja, a propósito: el voseo SIN tilde (`movelo` por
+    # `movélo`). Para separarlo habría que aceptar que la raíz termine en `e`
+    # pelada, y eso convierte `cielo` en `cie`+`lo` y `abuelo` en `abue`+`lo`.
+    # El corpus y los modelos escriben la tilde, así que el caso no aparece;
+    # romper palabras comunes para cubrirlo sería un mal negocio.
+    assert metrics.tokens("movelo") == ["movelo"]
+    assert metrics.tokens("cielo") == ["cielo"]
+
+    # Y lo que NO se puede romper: palabras comunes que terminan parecido a un
+    # clítico. Separar por el sufijo sin mirar la raíz convertiría `clase` en
+    # `cla` + `se`.
+    intactas = ("clase", "base", "sala", "espalda", "dolores", "almohada",
+                "camiseta", "pierna", "comida", "mesa", "casa", "ropa")
+    for w in intactas:
+        assert metrics.tokens(w) == [w], (
+            f"{w!r} se partió en {metrics.tokens(w)}")
+
+    # Dos frases realmente distintas tienen que seguir siendo distintas.
+    assert metrics.token_f1("quiero agua", "no quiero agua") < 0.9
+    assert metrics.token_f1("me duele", "tengo hambre") == 0.0
+    return (f"{len(mismas)} pares pronominales ahora empatan, "
+            f"{len(intactas)} palabras comunes intactas")
+
+
 def _catches_invention() -> str:
     corpus = {i["id"]: i for i in runner.load_corpus()}
     item = corpus["solo-agua"]
@@ -420,29 +462,72 @@ def _prompt_variants_are_nested() -> str:
     Lo que sí se sigue exigiendo: que cada variante contenga literalmente a su
     padre. Sin eso no hay atribución posible, con ramas o sin ellas.
     """
+    def _subsecuencia(padre: str, hijo: str) -> bool:
+        """¿Están TODAS las líneas del padre en el hijo, en orden e intactas?
+
+        Esto es lo que de verdad hace interpretable la ablación: que el hijo no
+        borre ni reescriba nada de su padre. Exigir que el padre sea un
+        substring CONTIGUO era más estricto de lo necesario y prohibía insertar
+        un bloque en el medio -que es donde suele ir la información útil, antes
+        de los ejemplos y no después del esquema JSON.
+
+        Y era estricto en el lugar equivocado: v9 inserta en el medio, así que
+        tampoco pasaba por esta vía y entraba por la rama de respaldo de abajo,
+        que solo comparaba longitudes. O sea que el anidamiento de v9 nunca se
+        verificó. Esto lo verifica.
+        """
+        lineas_h = hijo.split(chr(10))
+        i = 0
+        for linea in padre.split(chr(10)):
+            while i < len(lineas_h) and lineas_h[i] != linea:
+                i += 1
+            if i >= len(lineas_h):
+                return False
+            i += 1
+        return True
+
     order = list(prompts.VARIANTS.values())
     assert len(order) >= 5
     padres = {}
+    huerfanas = []
     for i, cur in enumerate(order[1:], start=1):
         previos = order[:i]
         padre = next((p for p in reversed(previos)
-                      if p.system in cur.system), None)
+                      if _subsecuencia(p.system, cur.system)), None)
         if padre is None:
-            # Las primeras variantes reescriben el encabezado en vez de
-            # anidarse textualmente; ahí alcanza con que no encojan.
-            assert len(cur.system) >= len(order[i - 1].system) - 40, (
-                f"{cur.variant} no extiende a ninguna variante anterior")
+            # Las primeras variantes reescriben el encabezado entero en vez de
+            # anidarse; se las cuenta y se las nombra, en vez de dejar pasar
+            # cualquier cosa que sea un poco más larga.
+            huerfanas.append(cur.variant)
         else:
             padres[cur.variant] = padre.variant
         assert cur.adds and cur.adds != order[i - 1].adds
+    # Estas cuatro REESCRIBEN en vez de agregar, y está medido: v1 cambia el
+    # encabezado de v0, v2 saca la línea de formato de v1, y **v5 elimina la
+    # regla 8 de v4** -la del literal- junto con el esquema JSON. O sea que la
+    # comparación v4 contra v5 de la tabla de ablación nunca fue atribuible a
+    # un solo agregado, y el chequeo anterior lo dejaba pasar porque solo
+    # comparaba longitudes.
+    #
+    # Se fijan por nombre y no por cantidad: así una variante NUEVA que rompa
+    # el anidamiento falla acá, mientras las históricas quedan declaradas en
+    # vez de disimuladas. No se arreglan porque ya fueron medidas: reescribir
+    # un prompt medido invalida sus resultados.
+    REESCRIBEN = {"v1-reglas", "v2-ejemplos", "v3-json", "v5-lecturas"}
+    nuevas = set(huerfanas) - REESCRIBEN
+    assert not nuevas, (
+        f"{sorted(nuevas)} no contiene a ninguna variante anterior. Cada "
+        f"variante nueva tiene que AGREGAR a una previa sin borrar nada, o la "
+        f"diferencia entre dos filas de la ablación deja de ser atribuible.")
     assert not order[0].json_mode, "la variante base no debe pedir JSON"
     assert order[-1].json_mode, "la última variante debe pedir JSON"
     for p in order:
         assert "entrada:" in p.user("AGUA")
         assert "AGUA" in p.user("AGUA")
-    ramas = ", ".join(f"{h}<-{padre}" for h, padre in padres.items())
-    return (f"{len(order)} variantes, cada una con un agregado nombrado"
-            + (f"; anidadas: {ramas}" if ramas else ""))
+    return (f"{len(order)} variantes, {len(padres)} anidadas sobre un padre "
+            f"verificado"
+            + (f", {len(huerfanas)} reescriben el encabezado "
+               f"({', '.join(huerfanas)})" if huerfanas else ""))
 
 
 # --------------------------------------------------------------- end to end
@@ -768,6 +853,7 @@ CHECKS = (
     ("el filtro no descarta lo correcto", _guard_keeps_good_candidates),
     ("el filtro acepta sinónimos deletreados", _guard_accepts_spelled_synonyms),
     ("dedupe atrapa la repetición", _dedupe_catches_repetition),
+    ("los clíticos no rompen el match", _cliticos_no_rompen_el_match),
     ("detecta invención", _catches_invention),
     ("detecta polaridad volteada", _catches_polarity_flip),
     ("detecta suavizado de urgencia", _catches_softening),

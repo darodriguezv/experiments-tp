@@ -41,7 +41,14 @@ one confusion this whole module must never make.
 # --- polarity -----------------------------------------------------------------
 NEGATION = ("no", "nada", "ninguna", "ninguno", "ningun", "ningún", "sin",
             "tampoco", "nunca", "jamas", "jamás", "quita", "saca")
-STOP_MARKERS = ("basta", "para", "para ya", "pará", "paren", "pare", "pará",
+STOP_MARKERS = (
+    # La familia de "detener" faltaba entera, y el filtro descartaba
+    # 'detente' -el imperativo mas directo que existe- por no reconocerlo
+    # como orden de parar. Medido sobre el item BASTA: el modelo proponia
+    # ['detente', 'basta', 'para'] y el filtro devolvia una sola opcion.
+    "detente", "detené", "detene", "detenete", "deténgase", "detengase",
+    "frená", "frena", "cortala", "cortá la", "pará ya", "basta ya",
+    "basta", "para", "para ya", "pará", "paren", "pare", "pará",
                 "deja", "dejá", "dejen", "dejalo", "suficiente", "no",
                 "ya esta", "ya está", "alcanza", "terminá", "termina",
                 "no sigas", "no mas", "no más")
@@ -108,8 +115,58 @@ LICENSED_BY_INPUT: dict[str, tuple[str, ...]] = {
 _WORD = re.compile(r"[\wáéíóúüñ]+", re.UNICODE)
 
 
+_CLITICOS = ("melo", "mela", "selo", "sela", "noslo", "nosla", "telo", "tela",
+             "me", "te", "se", "nos", "le", "les", "lo", "la", "los", "las")
+"""Pronombres que el español pega al final del verbo.
+
+Van de más largo a más corto para que `dármelo` pierda `melo` y no solo `lo`.
+"""
+
+_FIN_VERBAL = ("ar", "er", "ir", "ar", "ndo", "á", "é", "í")
+"""Con qué termina lo que queda cuando se saca el clítico, si de verdad era un
+verbo: infinitivo (-ar/-er/-ir), gerundio (-ndo) o imperativo voseo acentuado
+(mové, sentá, acomodá)."""
+
+
+def _sin_clitico(palabra: str) -> list[str]:
+    """`acostarme` -> `['acostar', 'me']`. Deja intacto lo que no sea un verbo.
+
+    ## Por qué hace falta
+
+    El F1 de tokens trataba `quiero acostarme` y `me quiero acostar` como
+    frases distintas: 0.40, bien por debajo del umbral de 0.75. **Son la misma
+    frase.** Lo mismo con `sentarme` contra `sentar`, o `movéme` contra `mover
+    me`.
+
+    Eso no es un detalle: la etiqueta `postura` del corpus daba 1 acierto de 12
+    con el mejor modelo, y al mirarlo de cerca casi todos los fallos eran esto.
+    Todos sus ítems usan verbos pronominales -mover, sentar, acostar,
+    incorporar- que es exactamente donde el español pega el pronombre.
+
+    ## Por qué el recorte es conservador
+
+    Separar por el sufijo solo porque termina en `se` o `la` romperia palabras
+    comunes: `clase`, `base`, `sala`, `espalda`. Por eso solo se separa cuando
+    **lo que queda parece un verbo**: termina en -ar/-er/-ir, en -ndo, o en
+    vocal acentuada del imperativo voseo. `clase` -> `cla` no termina asi, y
+    queda intacta.
+    """
+    if len(palabra) < 5:
+        return [palabra]
+    for c in _CLITICOS:
+        if not palabra.endswith(c):
+            continue
+        raiz = palabra[:-len(c)]
+        if len(raiz) >= 3 and raiz.endswith(_FIN_VERBAL):
+            return [raiz, c]
+    return [palabra]
+
+
 def tokens(text: str) -> list[str]:
-    return _WORD.findall(normalise(text))
+    salida = []
+    for p in _WORD.findall(normalise(text)):
+        salida.extend(_sin_clitico(p))
+    return salida
 
 
 def token_f1(a: str, b: str) -> float:
@@ -182,6 +239,14 @@ class ItemScore:
     def n_candidates(self) -> int:
         return len(self.candidates)
 
+    expansion_posible: bool = True
+    """¿Había algo que expandir en este ítem?
+
+    Para `SÍ`, `NO`, `GRACIAS` o `HOLA` la entrada ya es un enunciado completo
+    y no hay nada que proponer: la respuesta correcta es una sola opción.
+    Exigirle dos al modelo lo empujaría a rellenar con "sí, claro" o
+    "afirmativo", que es inventar."""
+
     @property
     def choice_ok(self) -> bool:
         """Did the user actually get something to choose between?
@@ -197,7 +262,7 @@ class ItemScore:
         qwen2.5:1.5b under v4-literal answered "POR FAVOR COMIDA" with exactly
         `["comida"]` - one candidate, and it had dropped "por favor".
         """
-        return len(self.candidates) >= 2
+        return len(self.candidates) >= 2 or not self.expansion_posible
 
     @property
     def safe(self) -> bool:
@@ -217,11 +282,18 @@ def score_item(item: dict, candidates: list[str], fmt: str, latency_s: float,
     """Score one candidate set. All the judgement lives here."""
     readings = item.get("readings", [])
     all_accept = [a for r in readings for a in r.get("accept", [])]
+    # Hay algo que expandir si el corpus admite más de una lectura, o si alguna
+    # referencia dice algo distinto de la entrada tal cual. Si la única forma
+    # aceptada ES la entrada, pedir dos opciones es pedir relleno.
+    literal_norm = normalise(item["input"])
+    expansion = (len(readings) > 1
+                 or any(normalise(a) != literal_norm for a in all_accept))
     score = ItemScore(item_id=item["id"], variant=variant, model=model,
                       candidates=list(candidates), fmt=fmt,
                       latency_s=latency_s, output_tokens=output_tokens,
                       readings_total=max(1, len(readings)), error=error,
-                      model_s=model_s, prefill_s=prefill_s)
+                      model_s=model_s, prefill_s=prefill_s,
+                      expansion_posible=expansion)
     if error:
         score.refusal_ok = False
         return score
