@@ -1,0 +1,526 @@
+<title>Tablero CAA por mirada</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: la pantalla del dispositivo ocupa el centro y manda; el texto que la
+   explica vive alrededor en la tipografía de la página, nunca encima. */
+:root {
+  --fondo: #f2f5f7;
+  --papel: #ffffff;
+  --borde: #dde4ea;
+  --tinta: #152029;
+  --tenue: #5b6b7a;
+  --marca: #156f7e;
+  --marca-suave: #e2eff2;
+
+  /* La pantalla del aparato. Son los mismos valores que dibuja ui.py, y se
+     quedan oscuros en los dos temas a propósito: esto es un aparato médico
+     que se mira fijo durante minutos, no un bloque de la página. */
+  --ap-fondo: #0e141b;
+  --ap-panel: #17202a;
+  --ap-celda: #1f2b38;
+  --ap-celda-ctrl: #1a242f;
+  --ap-celda-viva: #2d4254;
+  --ap-celda-hablar: #22383e;
+  --ap-filo: #344658;
+  --ap-texto: #e9f0f6;
+  --ap-tenue: #8495a5;
+  --ap-acento: #5eb6be;
+
+  --f-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-dato: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fondo: #0b1016;
+    --papel: #141d26;
+    --borde: #243039;
+    --tinta: #e6edf3;
+    --tenue: #91a1b0;
+    --marca: #5eb6be;
+    --marca-suave: #14323a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --fondo: #0b1016;
+  --papel: #141d26;
+  --borde: #243039;
+  --tinta: #e6edf3;
+  --tenue: #91a1b0;
+  --marca: #5eb6be;
+  --marca-suave: #14323a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--fondo); color: var(--tinta);
+  font-family: var(--f-ui); line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.marco {
+  max-width: 1040px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px;
+}
+
+header { margin-bottom: 22px; }
+h1 {
+  font-size: clamp(1.4rem, 3.4vw, 1.9rem); margin: 0 0 6px;
+  letter-spacing: -.02em; text-wrap: balance; font-weight: 600;
+}
+header p { margin: 0; color: var(--tenue); max-width: 62ch; }
+
+/* ---------------------------------------------------------- el aparato */
+.aparato {
+  background: var(--ap-fondo); border-radius: 18px; padding: 14px;
+  box-shadow: 0 1px 2px rgba(10,20,30,.1), 0 18px 46px rgba(10,20,30,.18);
+  user-select: none; touch-action: manipulation;
+}
+.panel {
+  background: var(--ap-panel); border-radius: 12px;
+  border-left: 4px solid var(--ap-acento);
+  padding: 14px 18px; margin-bottom: 10px;
+  min-height: 76px; display: flex; flex-direction: column; justify-content: center;
+}
+.panel .consigna {
+  font-size: .76rem; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--ap-acento); margin-bottom: 4px;
+}
+.panel .mensaje {
+  font-size: clamp(1.1rem, 3.2vw, 1.7rem); font-weight: 600;
+  color: var(--ap-texto); word-break: break-word; min-height: 1.2em;
+}
+.panel .mensaje.vacio { color: var(--ap-tenue); font-weight: 500; }
+
+.grilla { display: grid; gap: 8px; }
+.grilla.core { grid-template-columns: repeat(5, 1fr); }
+.grilla.abc  { grid-template-columns: repeat(6, 1fr); }
+
+.celda {
+  position: relative; border: 1px solid var(--ap-filo);
+  background: var(--ap-celda); color: var(--ap-texto);
+  border-radius: 12px; min-height: 62px;
+  display: grid; place-items: center; text-align: center;
+  font-weight: 600; font-size: clamp(.72rem, 1.9vw, 1rem);
+  padding: 4px 6px; cursor: pointer; overflow: hidden;
+  transition: background .12s ease;
+}
+.celda.ctrl { background: var(--ap-celda-ctrl); color: var(--ap-tenue); }
+.celda.hablar { background: var(--ap-celda-hablar); color: var(--ap-acento); }
+.celda.viva { background: var(--ap-celda-viva); color: var(--ap-texto); }
+.celda .relleno {
+  position: absolute; inset: 0; background: var(--ap-acento);
+  opacity: .22; transform-origin: left center; transform: scaleX(0);
+  pointer-events: none;
+}
+.celda .trazo {
+  position: absolute; left: 0; bottom: 0; height: 3px;
+  background: var(--ap-acento); width: 0; pointer-events: none;
+}
+.celda:focus-visible { outline: 2px solid var(--ap-acento); outline-offset: 2px; }
+
+/* medidor */
+.medidor {
+  display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline;
+  margin-top: 10px; padding: 10px 14px;
+  background: var(--ap-panel); border-radius: 10px;
+  font-family: var(--f-dato); font-size: .8rem; color: var(--ap-tenue);
+}
+.medidor b {
+  font-weight: 600; color: var(--ap-texto);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------- candidatos */
+.candidatos { display: grid; gap: 8px; }
+.cab-cand {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 4px;
+}
+.cab-cand h2 {
+  font-size: 1rem; margin: 0; color: var(--ap-texto); font-weight: 600;
+}
+.cab-cand .sello {
+  font-family: var(--f-dato); font-size: .7rem; color: var(--ap-tenue);
+}
+.opcion {
+  position: relative; overflow: hidden; cursor: pointer;
+  border: 1px solid var(--ap-filo); border-radius: 12px;
+  background: var(--ap-celda); color: var(--ap-texto);
+  padding: 16px 18px; font-size: clamp(.95rem, 2.4vw, 1.15rem);
+  font-weight: 600; text-align: center;
+}
+.opcion.literal {
+  background: var(--ap-celda-ctrl); color: var(--ap-tenue); font-weight: 500;
+}
+.opcion .etq {
+  position: absolute; left: 12px; top: 6px;
+  font-family: var(--f-dato); font-size: .62rem; letter-spacing: .06em;
+  color: var(--ap-tenue); text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------ prosa */
+.notas { margin-top: 34px; display: grid; gap: 16px; }
+.nota {
+  background: var(--papel); border: 1px solid var(--borde);
+  border-radius: 14px; padding: 20px 22px;
+}
+.nota h3 {
+  margin: 0 0 8px; font-size: .95rem; font-weight: 600;
+  letter-spacing: -.005em;
+}
+.nota p { margin: 0 0 10px; max-width: 64ch; }
+.nota p:last-child { margin-bottom: 0; }
+.nota .dato { font-family: var(--f-dato); font-size: .92em; color: var(--marca); }
+.cifras {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 12px; margin-top: 4px;
+}
+.cifra {
+  background: var(--marca-suave); border-radius: 10px; padding: 12px 14px;
+}
+.cifra b {
+  display: block; font-family: var(--f-dato); font-size: 1.3rem;
+  color: var(--marca); font-variant-numeric: tabular-nums; font-weight: 600;
+}
+.cifra span { font-size: .78rem; color: var(--tenue); }
+
+.pie { margin-top: 30px; color: var(--tenue); font-size: .82rem; max-width: 64ch; }
+
+@media (max-width: 560px) {
+  .celda { min-height: 52px; border-radius: 10px; }
+  .grilla { gap: 6px; }
+  .aparato { padding: 10px; border-radius: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .celda, .celda .relleno, .celda .trazo { transition: none; }
+}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="marco">
+  <header>
+    <h1>Tablero de comunicación por mirada</h1>
+    <p>Quien usa este tablero no puede hablar ni mover las manos. Elige cada
+      celda <strong>sosteniendo la mirada sobre ella</strong>. Acá la mirada se
+      reemplaza por el puntero: apoyá el cursor sobre una celda y mantenelo.</p>
+  </header>
+
+  <div class="aparato">
+    <div class="panel">
+      <div class="consigna" id="consigna">Mensaje</div>
+      <div class="mensaje vacio" id="mensaje">Apoyá el cursor en una celda y sostenelo</div>
+    </div>
+    <div id="escena"></div>
+    <div class="medidor">
+      <span>permanencias <b id="m-dwell">0</b></span>
+      <span>tiempo <b id="m-tiempo">0.0 s</b></span>
+      <span>cada selección cuesta <b>1.2 s</b></span>
+    </div>
+  </div>
+
+  <div class="notas">
+    <div class="nota">
+      <h3>Lo que acabás de sentir es el problema</h3>
+      <p>Cada palabra cuesta una permanencia de 1.2 segundos. Deletrear
+        <span class="dato">quiero agua</span> letra por letra son 11
+        selecciones: más de trece segundos para once caracteres. Esa es la
+        velocidad real de alguien con ELA avanzada usando un tablero pelado.</p>
+      <p>El módulo semántico existe para cortar eso: se escriben dos o tres
+        palabras sueltas y un modelo de lenguaje pequeño, corriendo en el mismo
+        equipo y sin internet, propone frases completas.</p>
+    </div>
+
+    <div class="nota">
+      <h3>Los candidatos que ves son reales</h3>
+      <p>No están inventados para esta demostración ni generados en vivo. Son
+        las salidas que produjo <span class="dato">qwen2.5:7b</span> sobre las
+        133 entradas del corpus de evaluación, guardadas durante una corrida
+        medida. Cuando armás una frase que está en el corpus, ves exactamente
+        lo que el sistema respondió.</p>
+      <p>Si armás una que no está, el tablero te ofrece lo literal: decir tal
+        cual lo que escribiste. Eso no es una limitación de la demostración —
+        es cómo funciona el aparato. La opción literal siempre está, porque si
+        las tres propuestas están mal, la persona tiene que poder decir lo
+        suyo igual.</p>
+      <div class="cifras">
+        <div class="cifra"><b>77%</b><span>la frase buscada está entre las 3</span></div>
+        <div class="cifra"><b>83%</b><span>ofreció la opción literal</span></div>
+        <div class="cifra"><b>0.26 s</b><span>en responder</span></div>
+        <div class="cifra"><b>1%</b><span>inventó algo no dicho</span></div>
+      </div>
+    </div>
+
+    <div class="nota">
+      <h3>Qué falta acá</h3>
+      <p>Esta página <strong>no hace seguimiento de mirada</strong>: el
+        navegador no le da acceso a la cámara. El sistema real estima dónde
+        mirás con 478 puntos faciales y un filtro de Kalman, y hay que calibrar
+        un minuto antes de cada sesión. Eso corre en el equipo, no en una
+        página web.</p>
+      <p>Tampoco corre el modelo acá. En el aparato, el modelo vive en el mismo
+        equipo: la cara de la persona y lo que dice nunca salen del cuarto.</p>
+    </div>
+  </div>
+
+  <p class="pie">Tesis de grado · dispositivo de comunicación aumentativa para
+    personas con ELA. Lo que ves es la interfaz y las salidas reales del
+    módulo semántico; el seguimiento de mirada y la inferencia corren en el
+    equipo dedicado.</p>
+</div>
+
+<script>
+const GRABADO = {"AGUA":{"c":["agua","necesito agua","agua, por favor"],"hit":true,"ms":1229},"BAÑO":{"c":["necesito ir al baño","ir al baño","baño"],"hit":true,"ms":743},"DOLOR":{"c":["me duele","dolor","tengo dolor"],"hit":true,"ms":794},"AYUDA":{"c":["ayuda","necesito ayuda"],"hit":true,"ms":646},"BASTA":{"c":["basta","detente","pará"],"hit":true,"ms":570},"SÍ":{"c":["sí"],"hit":true,"ms":347},"NO":{"c":["no"],"hit":true,"ms":576},"QUIERO AGUA":{"c":["quiero agua","quiero agua, por favor","tengo sed"],"hit":true,"ms":729},"NECESITO MEDICINA":{"c":["necesito medicina","tengo necesidad de medicina","medicina"],"hit":true,"ms":841},"QUIERO COMIDA":{"c":["quiero comida","quiero comer","comida"],"hit":true,"ms":648},"NO AGUA":{"c":["no quiero agua","no hay agua","no agua"],"hit":true,"ms":634},"AGUA NO":{"c":["no quiero agua","agua no","no hay agua"],"hit":true,"ms":662},"NO QUIERO COMIDA":{"c":["no quiero comida","no quiero nada","no quiero alimentarme"],"hit":true,"ms":694},"ME SIENTO MAL":{"c":["me siento mal","me duele"],"hit":true,"ms":745},"ME SIENTO BIEN":{"c":["estoy bien","me siento bien"],"hit":true,"ms":769},"MÁS AGUA":{"c":["quiero más agua","necesito más agua","agua más"],"hit":true,"ms":775},"MÁS":{"c":["más","quiero más"],"hit":true,"ms":634},"MENOS":{"c":["menos","menor"],"hit":true,"ms":594},"MAL":{"c":["me siento mal","estoy mal","mal"],"hit":true,"ms":663},"POR FAVOR AGUA":{"c":["agua","agua, por favor","necesito agua"],"hit":true,"ms":696},"GRACIAS":{"c":["gracias"],"hit":true,"ms":566},"HOLA":{"c":["hola"],"hit":true,"ms":576},"QUIERO BAÑO AYUDA":{"c":["quiero bañarme ayuda","necesito bañarme","baño"],"hit":false,"ms":990},"AGUA POR FAVOR MÁS":{"c":["agua por favor más","quiero más agua","agua por favor"],"hit":true,"ms":830},"DOLOR MÁS":{"c":["me duele más","dolor más","dolor"],"hit":true,"ms":754},"MEDICINA DOLOR":{"c":["necesito medicina","tengo dolor","medicina dolor"],"hit":false,"ms":862},"TAL VEZ":{"c":["tal vez"],"hit":true,"ms":654},"NECESITO AYUDA BASTA":{"c":["no necesito ayuda","ayuda no","ayuda no, gracias"],"hit":false,"ms":870},"QUIERO MANTA":{"c":["quiero manta","quiero una manta","manta"],"hit":true,"ms":772},"VENTANA":{"c":["ventana","la ventana","la ventana está abierta"],"hit":true,"ms":686},"QUIERO TELEVISION":{"c":["quiero televisión","encendé la televisión","quiero ver televisión"],"hit":true,"ms":939},"QUIERO HIJA":{"c":["quiero hija","quiero una hija"],"hit":false,"ms":880},"FRIO":{"c":["estoy frío","me siento frío","frío"],"hit":true,"ms":827},"SÍ POR FAVOR":{"c":["sí por favor","sí","por favor"],"hit":true,"ms":712},"NO BASTA DOLOR":{"c":["no es suficiente el dolor","el dolor no es suficiente","no basta el dolor"],"hit":false,"ms":1015},"":{"c":["entrada","estoy bien","estoy"],"hit":false,"ms":632},"A":{"c":["a","aaS"],"hit":true,"ms":504},"AGUA AGUA AGUA":{"c":["agua","agua agua agua","necesito agua"],"hit":true,"ms":754},"QUIERO":{"c":["quiero","quiere"],"hit":true,"ms":655},"GRACIAS BASTA":{"c":["gracias","detente","gracias bastan"],"hit":false,"ms":720},"AIRE":{"c":["necesito aire","apagá el aire","el aire"],"hit":true,"ms":806},"NO AIRE":{"c":["no hay aire","aire no","no me está llegando aire"],"hit":true,"ms":868},"AHOGO":{"c":["me ahogo","ahogo"],"hit":true,"ms":594},"ASPIRAR":{"c":["aspiro","respiro","aspirar"],"hit":false,"ms":660},"MUCHA FLEMA":{"c":["tengo mucha flema","me sale mucha flema","flema mucha"],"hit":true,"ms":1028},"MASCARA MAL":{"c":["la máscara no me queda bien","la máscara está mal","máscara mal"],"hit":true,"ms":953},"BASTA MASCARA":{"c":["basta máscara","detente","stop"],"hit":true,"ms":622},"NO PUEDO TOSER":{"c":["no puedo toser","parar de toser","no toso"],"hit":true,"ms":867},"RESPIRO BIEN":{"c":["respiro bien","estoy respirando bien","respiro"],"hit":true,"ms":844},"MOVER":{"c":["mover"],"hit":false,"ms":417},"INCOMODO":{"c":["me incomoda","estoy incomodo","incomodo"],"hit":false,"ms":754},"MOVER PIERNA":{"c":["quiero mover la pierna","mover pierna","necesito mover la pierna"],"hit":true,"ms":979},"MOVER BRAZO":{"c":["quiero mover el brazo","mover brazo","necesito mover el brazo"],"hit":false,"ms":1022},"ALMOHADA":{"c":["almojada","la almojada","almohada"],"hit":false,"ms":814},"ALMOHADA MAS ALTA":{"c":["subir la alarma","almojada más alta","almojada mas alta"],"hit":false,"ms":966},"SENTAR":{"c":["me siento","sentar"],"hit":false,"ms":744},"ACOSTAR":{"c":["me quiero acostar","acostar","me acuesto"],"hit":false,"ms":791},"NO MOVER":{"c":["no mover","no quiero ser movido","no quiero moverme"],"hit":false,"ms":695},"BASTA MOVER":{"c":["basta mover","detente","no puedo mover"],"hit":false,"ms":607},"CABEZA CAE":{"c":["mi cabeza cae","cabeza cae","mi cabeza se cae"],"hit":false,"ms":870},"PIE MAL":{"c":["mi pie mal","mi pie","pie mal"],"hit":false,"ms":697},"DOLOR ESPALDA":{"c":["me duele la espalda","dolor en la espalda","dolor espalda"],"hit":true,"ms":1070},"DOLOR CUELLO":{"c":["me duele el cuello","dolor cuello","tengo dolor en el cuello"],"hit":true,"ms":1050},"DOLOR CABEZA":{"c":["me duele la cabeza","dolor de cabeza","dolor en la cabeza"],"hit":true,"ms":889},"DOLOR PIERNA":{"c":["me duele la pierna","dolor en la pierna","dolor de pierna"],"hit":true,"ms":983},"DOLOR MUCHO":{"c":["me duele mucho","dolor mucho","tengo mucho dolor"],"hit":true,"ms":828},"DOLOR MENOS":{"c":["me duele menos","dolor menos","dolor menor"],"hit":true,"ms":800},"DOLOR NO":{"c":["no me duele","dolor no","no tengo dolor"],"hit":true,"ms":693},"DOLOR IGUAL":{"c":["me duele igual","dolor igual","tengo dolor igual"],"hit":true,"ms":806},"DOLOR MEDICINA":{"c":["me duele, dame medicina","dolor medicina","necesito medicina por el dolor"],"hit":false,"ms":1023},"QUEMA PIERNA":{"c":["quema mi pierna","quema la pierna","quema pierna"],"hit":true,"ms":835},"BAÑO YA":{"c":["necesito ir al baño","baño ya","ir al baño"],"hit":true,"ms":751},"LIMPIAR":{"c":["limpiá","limpiar","limpio"],"hit":false,"ms":608},"BOCA SECA":{"c":["boca seca","tengo boca seca","necesito agua"],"hit":true,"ms":834},"LAVAR DIENTES":{"c":["lavar dientes","quiero lavar dientes","me quiero lavar los dientes"],"hit":false,"ms":854},"TENGO SUDOR":{"c":["tengo sudor","me estoy sudando","tengo sudoración"],"hit":true,"ms":754},"CAMBIAR":{"c":["cambiar","quiero cambiar","cambio"],"hit":false,"ms":634},"NO PUEDO TRAGAR":{"c":["no puedo tragar","no consigo tragar"],"hit":true,"ms":848},"ME ATRAGANTO":{"c":["me atraganto","me atraganté","me atraganto, por favor"],"hit":true,"ms":858},"DESPACIO":{"c":["despacio","basta","con lentitud"],"hit":false,"ms":619},"BASTA COMIDA":{"c":["no quiero más comida","basta comida","detente con la comida"],"hit":true,"ms":752},"COMIDA MAS":{"c":["quiero más comida","necesito más comida","comida más"],"hit":true,"ms":796},"COMIDA FRIA":{"c":["quiero comida fría","comida fría","comida fria"],"hit":true,"ms":842},"NO HAMBRE":{"c":["no tengo hambre","no hambre"],"hit":true,"ms":745},"SONDA MAL":{"c":["la sonda me duele","la sonda está mal","sonda mal"],"hit":true,"ms":868},"CALOR":{"c":["me duele calor","calor","tiene calor"],"hit":false,"ms":760},"MANTA MAS":{"c":["quiero manta","manta más","manta mas"],"hit":true,"ms":770},"BASTA MANTA":{"c":["basta manta","detente","basta"],"hit":true,"ms":609},"PIES FRIOS":{"c":["mis pies están fríos","me duele un pie","pies frios"],"hit":false,"ms":863},"ENFERMERA":{"c":["llamo a la enfermera","enfermera","llamo por la enfermera"],"hit":true,"ms":1000},"DOCTOR":{"c":["llamá al doctor","veré el doctor","doctor"],"hit":true,"ms":684},"LLAMAR HIJA":{"c":["llamar a mi hija","llamo a mi hija","hija"],"hit":true,"ms":801},"QUIERO SOLO":{"c":["quiero solo","solo","quiero"],"hit":true,"ms":602},"NO SOLO":{"c":["no solo","no solamente","solo no"],"hit":true,"ms":609},"QUEDATE":{"c":["quedate","quedate aquí","quedate por favor"],"hit":true,"ms":747},"GRACIAS ENFERMERA":{"c":["gracias enfermera","gracias","gracias en enfermera"],"hit":true,"ms":737},"LUZ SI":{"c":["enciende la luz","luz si","la luz"],"hit":true,"ms":640},"LUZ NO":{"c":["apagá la luz","no quiero luz","luces no"],"hit":true,"ms":705},"ABRIR VENTANA":{"c":["abrir ventana","abrir la ventana","ventana"],"hit":false,"ms":697},"CERRAR PUERTA":{"c":["cierro la puerta","cierro el puerta","cerra la puerta"],"hit":false,"ms":919},"MUCHO RUIDO":{"c":["hay mucho ruido","el ruido es alto","mucha ruido"],"hit":true,"ms":812},"TELEVISION NO":{"c":["apagá la televisión","no quiero la televisión","televisión no"],"hit":true,"ms":838},"MUSICA":{"c":["quiero música","apaga la música","música"],"hit":true,"ms":714},"VOLUMEN MENOS":{"c":["baja el volumen","disminuyó el volumen","volumen menos"],"hit":true,"ms":933},"ANTEOJOS":{"c":["necesito mis anteojos","mi anteojo falta","anteojo"],"hit":false,"ms":957},"MIEDO":{"c":["me asusta algo","tengo miedo","miedo"],"hit":true,"ms":757},"TRISTE":{"c":["estoy triste","triste","me siento triste"],"hit":true,"ms":729},"CANSADO":{"c":["estoy cansado","cansado","me siento cansado"],"hit":true,"ms":850},"BASTA TODO":{"c":["detente","basta","todo basta"],"hit":true,"ms":637},"NERVIOSO":{"c":["estoy nervioso","soy nervioso","nervioso"],"hit":true,"ms":810},"ESTOY TRANQUILO":{"c":["estoy tranquilo","tranquilo","me siento tranquilo"],"hit":true,"ms":795},"GRACIAS TODO":{"c":["gracias","gracias todo","todo"],"hit":true,"ms":660},"ESPERA":{"c":["espera","espero","basta"],"hit":false,"ms":591},"NO ENTENDISTE":{"c":["no entendiste","no te entendí"],"hit":true,"ms":788},"OTRA VEZ":{"c":["otra vez","no otra vez","vuelvo a necesitar"],"hit":true,"ms":869},"DESPUES":{"c":["después"],"hit":true,"ms":560},"SI ESO":{"c":["si eso","eso si","sí eso"],"hit":true,"ms":600},"CASI":{"c":["casi","casí","casi no"],"hit":true,"ms":632},"LETRA MAL":{"c":["letra mal","letra","mal"],"hit":false,"ms":565},"QUIERO DORMIR":{"c":["quiero dormir","me quiero dormir","dormir"],"hit":true,"ms":816},"NO PUEDO DORMIR":{"c":["no puedo dormir","no consigo dormir","no duermo"],"hit":true,"ms":777},"NO DESPERTAR":{"c":["no despiertes","no quiero despertar","no despertar"],"hit":true,"ms":805},"AB":{"c":["ab"],"hit":true,"ms":516},"ME SIENTO":{"c":["me siento","me siento bien"],"hit":true,"ms":763},"POR FAVOR":{"c":["por favor","favor","pf"],"hit":true,"ms":542},"NO NO NO":{"c":["no no no","no","no no"],"hit":true,"ms":602},"SI NO":{"c":["no","si no","sí no"],"hit":true,"ms":778},"TAL VEZ AGUA":{"c":["tal vez agua","tal vez necesito agua","agua"],"hit":true,"ms":653},"BASTA GRACIAS":{"c":["basta gracias","detente","basta"],"hit":true,"ms":614},"AYUDA AYUDA":{"c":["ayuda ayuda","ayuda","necesito ayuda"],"hit":true,"ms":698},"AGUA QUIERO":{"c":["agua quiero","quiero agua","agua"],"hit":true,"ms":604},"MAL MAL":{"c":["me siento mal mal","estoy mal mal","mal mal"],"hit":true,"ms":737}};
+
+const PAGINAS = {
+  core: [
+    ["SÍ","NO","POR FAVOR","GRACIAS","HOLA"],
+    ["QUIERO","NECESITO","ME SIENTO","AYUDA","BASTA"],
+    ["AGUA","COMIDA","BAÑO","DOLOR","MEDICINA"],
+    ["MÁS","MENOS","BIEN","MAL","TAL VEZ"],
+    [["ABC","page:abc"],["ESPACIO","space"],["BORRAR","delete"],
+     ["LIMPIAR","clear"],["HABLAR","speak"]]
+  ],
+  abc: [
+    ["A","B","C","D","E","F"],
+    ["G","H","I","J","K","L"],
+    ["M","N","Ñ","O","P","Q"],
+    ["R","S","T","U","V","W"],
+    ["X","Y","Z",".",",","?"],
+    [["PALABRAS","page:core"],["ESPACIO","space"],["BORRAR","delete"],
+     ["LIMPIAR","clear"],["HABLAR","speak"]]
+  ]
+};
+
+// Los mismos números que el aparato: config.py dwell_ms=1200,
+// refractory_ms=600. Si se tocan acá, la demo deja de representar el costo
+// que mide la tesis.
+const DWELL_MS = 1200, REFRACTARIO_MS = 600;
+
+const est = {
+  pagina: "core", palabras: [], letras: "",
+  vista: "tablero", candidatos: null, dwells: 0, t0: null, bloqueoHasta: 0
+};
+
+const $ = (s) => document.querySelector(s);
+const escena = $("#escena");
+
+function texto() {
+  const p = est.palabras.join(" ");
+  return (p + (est.letras ? (p ? " " : "") + est.letras : "")).trim();
+}
+
+function pintarPanel() {
+  const t = texto();
+  const esCand = est.vista === "candidatos";
+  $("#consigna").textContent = esCand ? "¿Cuál quiso decir?" : "Mensaje";
+  const m = $("#mensaje");
+  m.textContent = t || "Apoyá el cursor en una celda y sostenelo";
+  m.classList.toggle("vacio", !t);
+}
+
+function pintarMedidor() {
+  $("#m-dwell").textContent = est.dwells;
+  const s = est.t0 ? (Date.now() - est.t0) / 1000 : 0;
+  $("#m-tiempo").textContent = s.toFixed(1) + " s";
+}
+
+function celda(etiqueta, accion, clase) {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "celda" + (clase ? " " + clase : "");
+  el.innerHTML = '<span class="relleno"></span><span class="trazo"></span>';
+  const span = document.createElement("span");
+  span.textContent = etiqueta;
+  el.appendChild(span);
+  el.dataset.accion = accion;
+  el.setAttribute("aria-label", etiqueta);
+  return el;
+}
+
+function pintarTablero() {
+  est.vista = "tablero";
+  const filas = PAGINAS[est.pagina];
+  const g = document.createElement("div");
+  g.className = "grilla " + est.pagina;
+  filas.forEach((fila) => fila.forEach((c) => {
+    const [etq, acc] = Array.isArray(c) ? c : [c, "w:" + c];
+    let clase = "";
+    if (acc === "speak") clase = "hablar";
+    else if (!acc.startsWith("w:")) clase = "ctrl";
+    g.appendChild(celda(etq, acc, clase));
+  }));
+  escena.replaceChildren(g);
+  pintarPanel();
+}
+
+function pintarCandidatos() {
+  est.vista = "candidatos";
+  const caja = document.createElement("div");
+  caja.className = "candidatos";
+
+  const cab = document.createElement("div");
+  cab.className = "cab-cand";
+  const h = document.createElement("h2");
+  h.textContent = est.candidatos.grabado
+    ? "Lo que respondió el modelo" : "Sin respuesta guardada para esta frase";
+  const sello = document.createElement("span");
+  sello.className = "sello";
+  sello.textContent = est.candidatos.grabado
+    ? "qwen2.5:7b · " + est.candidatos.ms + " ms · grabado"
+    : "fuera del corpus de evaluación";
+  cab.append(h, sello);
+  caja.appendChild(cab);
+
+  est.candidatos.lista.forEach((frase) => {
+    const esLit = frase.toLowerCase() === texto().toLowerCase();
+    const el = celda(frase, "say:" + frase, "");
+    el.classList.remove("celda");
+    el.classList.add("opcion");
+    if (esLit) el.classList.add("literal");
+    if (esLit) {
+      const e = document.createElement("span");
+      e.className = "etq";
+      e.textContent = "literal";
+      el.insertBefore(e, el.firstChild.nextSibling);
+    }
+    caja.appendChild(el);
+  });
+
+  const volver = celda("VOLVER AL TABLERO", "back", "");
+  volver.classList.remove("celda");
+  volver.classList.add("opcion", "literal");
+  caja.appendChild(volver);
+
+  escena.replaceChildren(caja);
+  pintarPanel();
+}
+
+function hablar(frase) {
+  try {
+    const u = new SpeechSynthesisUtterance(frase);
+    u.lang = "es-ES";
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  } catch (_) { /* sin voz: el texto ya está en pantalla */ }
+}
+
+function aplicar(accion) {
+  est.dwells += 1;
+  if (!est.t0) est.t0 = Date.now();
+
+  if (accion.startsWith("w:")) {
+    const v = accion.slice(2);
+    if (est.pagina === "abc") est.letras += v;
+    else { if (est.letras) { est.palabras.push(est.letras); est.letras = ""; }
+           est.palabras.push(v); }
+  } else if (accion.startsWith("page:")) {
+    if (est.letras) { est.palabras.push(est.letras); est.letras = ""; }
+    est.pagina = accion.slice(5);
+  } else if (accion === "space") {
+    if (est.letras) { est.palabras.push(est.letras); est.letras = ""; }
+  } else if (accion === "delete") {
+    if (est.letras) est.letras = est.letras.slice(0, -1);
+    else est.palabras.pop();
+  } else if (accion === "clear") {
+    est.palabras = []; est.letras = "";
+  } else if (accion === "speak") {
+    if (est.letras) { est.palabras.push(est.letras); est.letras = ""; }
+    const t = texto();
+    if (!t) { pintarTablero(); return; }
+    const g = GRABADO[t.toUpperCase()];
+    const lista = g ? g.c.slice() : [];
+    // El literal SIEMPRE está, aunque el modelo no lo haya propuesto. Es la
+    // salida de escape del diseño: si las tres propuestas están mal, la
+    // persona tiene que poder decir lo suyo igual.
+    if (!lista.some((c) => c.toLowerCase() === t.toLowerCase())) {
+      lista.push(t.toLowerCase());
+    }
+    est.candidatos = { lista, grabado: !!g, ms: g ? g.ms : 0 };
+    pintarCandidatos();
+    return;
+  } else if (accion.startsWith("say:")) {
+    const frase = accion.slice(4);
+    hablar(frase);
+    est.palabras = []; est.letras = ""; est.candidatos = null;
+    pintarTablero();
+    return;
+  } else if (accion === "back") {
+    est.candidatos = null;
+    pintarTablero();
+    return;
+  }
+
+  if (est.vista === "tablero") pintarTablero();
+  pintarPanel();
+}
+
+/* --- la permanencia ----------------------------------------------------
+   Nada de clics. El aparato se maneja sosteniendo la mirada, y una demo que
+   se maneja a clics esconde justamente lo que cuesta usarlo. */
+let activo = null, inicio = 0, raf = 0;
+
+function detener() {
+  if (activo) {
+    activo.classList.remove("viva");
+    activo.querySelector(".relleno").style.transform = "scaleX(0)";
+    activo.querySelector(".trazo").style.width = "0";
+  }
+  activo = null;
+  cancelAnimationFrame(raf);
+}
+
+function latir() {
+  if (!activo) return;
+  const p = Math.min(1, (performance.now() - inicio) / DWELL_MS);
+  activo.querySelector(".relleno").style.transform = "scaleX(" + p + ")";
+  activo.querySelector(".trazo").style.width = (p * 100) + "%";
+  if (p >= 1) {
+    const accion = activo.dataset.accion;
+    detener();
+    est.bloqueoHasta = performance.now() + REFRACTARIO_MS;
+    aplicar(accion);
+    pintarMedidor();
+    return;
+  }
+  raf = requestAnimationFrame(latir);
+}
+
+function arrancar(el) {
+  if (!el || el === activo) return;
+  if (performance.now() < est.bloqueoHasta) return;
+  detener();
+  activo = el;
+  activo.classList.add("viva");
+  inicio = performance.now();
+  raf = requestAnimationFrame(latir);
+}
+
+escena.addEventListener("pointerover", (e) => {
+  const el = e.target.closest("[data-accion]");
+  if (el) arrancar(el); else detener();
+});
+escena.addEventListener("pointerout", (e) => {
+  const el = e.target.closest("[data-accion]");
+  if (el && el === activo && !el.contains(e.relatedTarget)) detener();
+});
+// Táctil: mantener el dedo apoyado equivale a sostener la mirada.
+escena.addEventListener("pointerdown", (e) => {
+  const el = e.target.closest("[data-accion]");
+  if (el) { e.preventDefault(); arrancar(el); }
+});
+escena.addEventListener("pointerup", detener);
+escena.addEventListener("pointercancel", detener);
+// Teclado, para quien navegue sin puntero.
+escena.addEventListener("focusin", (e) => {
+  const el = e.target.closest("[data-accion]");
+  if (el) arrancar(el);
+});
+escena.addEventListener("focusout", detener);
+
+setInterval(() => { if (est.t0) pintarMedidor(); }, 100);
+pintarTablero();
+pintarMedidor();
+</script>
