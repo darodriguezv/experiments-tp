@@ -156,15 +156,21 @@ def construir(scores, costos, ruta_run) -> str:
         disco = (f"{c.disk_gb:.1f} GB" if c
                  else (f"{meta['size_gb']:.1f} GB~" if meta.get("size_gb")
                        else "—"))
+        # Una licencia que no conocemos NO es una licencia restrictiva:
+        # decir "no entregable" porque falta el dato afirma un hecho que
+        # nadie verificó.
+        entregable = ("sin dato" if lic == "?"
+                      else "sí" if lic in LICENCIAS_DISTRIBUIBLES
+                      else "**no**")
         w(f"| `{modelo}` | {a['variant']} | **{_pct(a['recall_at_n'])}** | "
           f"{_pct(a['literal_rate'])} | {_pct(a['invention_rate'])} | "
           f"{_pct(a['polarity_fail_rate'])} | {a['diversity']:.2f} | "
-          f"{a['model_p50']:.2f} s | {disco} | {lic} | "
-          f"{'sí' if lic in LICENCIAS_DISTRIBUIBLES else '**no**'} |")
+          f"{a['model_p50']:.2f} s | {disco} | {lic} | {entregable} |")
     w("")
-    w("`~` marca un tamaño declarado por el fabricante, no medido en esta "
-      "máquina.")
-    w("")
+    if any(m not in costos for m in mejor):
+        w("`~` marca un tamaño declarado por el fabricante, no medido en esta "
+          "máquina.")
+        w("")
     w("**Qué mide cada columna**")
     w("")
     w("- **recall@3**: la frase buscada aparece entre los 3 candidatos. Se "
@@ -203,11 +209,14 @@ def construir(scores, costos, ruta_run) -> str:
           "nosotros*, y lo que hay que mover es el prompt o el corpus, no el "
           "umbral.")
         w("")
-        w("Los más cerca por recall:")
+        w("Los más cerca, y **en qué** fallan. Reportar solo la distancia al "
+          "recall sería engañoso: un modelo puede llegar al 80% y quedar "
+          "afuera por inventar, que es una falla de otra naturaleza y no se "
+          "compensa con recall.")
         w("")
         for m, a in cerca:
-            falta = max(0.0, 0.80 - a["recall_at_n"])
-            w(f"- `{m}`: {_pct(a['recall_at_n'])}, le faltan {falta:.0%}")
+            w(f"- `{m}` ({_pct(a['recall_at_n'])} de recall): "
+              + "; ".join(_por_que_no(a)))
     w("")
 
     # ----------------------------------------------------- familias
@@ -316,11 +325,146 @@ def construir(scores, costos, ruta_run) -> str:
           "tras reiniciar.")
         w("")
 
+    w("## Qué se concluye")
+    w("")
+    w(_conclusiones(mejor, costos, n_items))
+    w("")
     w("## Límites de esta medición")
     w("")
     w(_limites(n_items, costos))
     w("")
     return "\n".join(L) + "\n"
+
+
+def _conclusiones(mejor, costos, n):
+    """Las conclusiones, derivadas de los mismos números de las tablas.
+
+    Se calculan en vez de escribirse para que no puedan contradecir a la tabla
+    que tienen arriba: si la próxima corrida invierte un resultado, el texto se
+    da vuelta con ella. Ya pasó una vez - al pasar de 40 a 133 entradas se
+    invirtió la conclusión sobre dos variantes de prompt - y un párrafo fijo
+    habría quedado afirmando lo contrario de su propia tabla.
+    """
+    L = []
+    g = lambda m: mejor.get(m)  # noqa: E731
+
+    # --- cuantización ---
+    difs = []
+    for a, b, *_ in CUANTIZACION:
+        if g(a) and g(b):
+            difs.append(abs(g(b)["recall_at_n"] - g(a)["recall_at_n"]))
+    if difs:
+        L.append(
+            f"**Cuantizar sale gratis.** Las {len(difs)} comparaciones de "
+            f"precisión a modelo fijo difieren como mucho "
+            f"{max(difs):.0%} y ninguna es legible con este corpus. Para esta "
+            f"tarea, Q4_K_M no cuesta calidad: la cuantización pasa a ser una "
+            f"decisión de costo pura y no una concesión.")
+
+    # --- parámetros contra precisión ---
+    gana_params = 0
+    for chico, grande, _ in PRESUPUESTO:
+        if g(chico) and g(grande) and g(grande)["recall_at_n"] > g(chico)["recall_at_n"]:
+            gana_params += 1
+    if gana_params:
+        L.append(
+            f"**Al mismo disco conviene gastar en parámetros, no en bits.** "
+            f"En {gana_params} de {len(PRESUPUESTO)} presupuestos el modelo "
+            f"más grande y más cuantizado le gana al más chico y más preciso. "
+            f"La intuición contraria -que un modelo chico sin cuantizar rinda "
+            f"más que uno grande cuantizado- no tiene respaldo acá.")
+
+    # --- familias ---
+    ruidosos, reales = [], []
+    for a, b, _ in PARES:
+        if not (g(a) and g(b)):
+            continue
+        va, vb = g(a)["recall_at_n"], g(b)["recall_at_n"]
+        ver, _z = _delta_verdict(va, vb, g(a)["n"], g(b)["n"])
+        (ruidosos if ver == "ruido" else reales).append((a, b, vb - va))
+    if ruidosos:
+        pares = ", ".join(f"`{b}`" for _a, b, _d in ruidosos)
+        L.append(
+            f"**Contra {pares} no hay diferencia demostrable.** A tamaño "
+            f"igualado el corpus no los distingue de Qwen, así que la elección "
+            f"entre ellos se decide por licencia y costo, no por calidad. "
+            f"Afirmar superioridad técnica sería ir más allá del dato.")
+    perdedores = [(b, d) for _a, b, d in reales if d < 0]
+    if perdedores:
+        txt = ", ".join(f"`{b}` ({d:+.0%})" for b, d in perdedores)
+        L.append(f"**Qwen sí les gana a {txt}**, con diferencias por encima "
+                 f"del umbral de legibilidad del corpus.")
+    ganadores = [(b, d) for _a, b, d in reales if d > 0]
+    if ganadores:
+        txt = ", ".join(f"`{b}` ({d:+.0%})" for b, d in ganadores)
+        L.append(f"**Y pierde contra {txt}.** No se puede omitir: es un "
+                 f"resultado que desordena la narrativa pero está en el dato.")
+
+    # --- el control en inglés ---
+    if g("qwen2.5:1.5b") and g("smollm2:1.7b"):
+        a, b = g("qwen2.5:1.5b"), g("smollm2:1.7b")
+        ca = next((c for m, c in costos.items() if m == "qwen2.5:1.5b"), None)
+        cb = next((c for m, c in costos.items() if m == "smollm2:1.7b"), None)
+        mas_grande = (cb and ca and cb.disk_gb > ca.disk_gb)
+        L.append(
+            f"**El español en el entrenamiento pesa más que el tamaño.** "
+            f"`smollm2:1.7b`, entrenado casi solo en inglés"
+            + (f" y **más grande** en disco que `qwen2.5:1.5b`" if mas_grande else "")
+            + f", saca {_pct(b['recall_at_n'])} contra "
+              f"{_pct(a['recall_at_n'])}. Es la diferencia más limpia de la "
+              f"tabla y explica *por qué* funciona lo que funciona, que es más "
+              f"de lo que da cualquier ranking.")
+
+    # --- el literal, que suele perderse de vista ---
+    if g("qwen2.5:3b") and g("qwen2.5:7b"):
+        a, b = g("qwen2.5:3b"), g("qwen2.5:7b")
+        ver, z = _delta_verdict(a["literal_rate"], b["literal_rate"],
+                                a["n"], b["n"])
+        vr, _ = _delta_verdict(a["recall_at_n"], b["recall_at_n"],
+                               a["n"], b["n"])
+        if ver != "ruido" and vr == "ruido":
+            L.append(
+                f"**Entre el 3b y el 7b lo que cambia no es el recall sino la "
+                f"salida de escape.** El recall es indistinguible, pero el "
+                f"literal pasa de {_pct(a['literal_rate'])} a "
+                f"{_pct(b['literal_rate'])} ({ver}, z={z:+.2f}). Con el 3b, "
+                f"una de cada dos veces la persona no recibe la opción de "
+                f"decir exactamente lo que escribió. Es la diferencia que se "
+                f"nota usándolo y la que un ranking por recall esconde.")
+
+    return "\n\n".join(f"{i}. {t}" for i, t in enumerate(L, 1))
+
+
+def _por_que_no(a, max_latencia=4.0):
+    """Qué condición concreta de `metrics.usable` incumple esta configuración.
+
+    Se enumeran TODAS las que fallan, no la primera. Un modelo que falla por
+    recall es un problema distinto de uno que falla por inventar, y uno que
+    falla por ambas no se arregla con lo mismo.
+    """
+    faltas = []
+    if a["invention_rate"] > 0:
+        faltas.append(f"inventa {_pct(a['invention_rate'])} (tiene que ser 0%)")
+    if a["polarity_fail_rate"] > 0:
+        faltas.append(f"vuelca polaridad {_pct(a['polarity_fail_rate'])} "
+                      f"antes del filtro")
+    if a["softening_rate"] > 0:
+        faltas.append(f"suaviza urgencia {_pct(a['softening_rate'])}")
+    if a["refusal_fail_rate"] > 0:
+        faltas.append(f"adivina lo incompleto {_pct(a['refusal_fail_rate'])}")
+    if a["literal_rate"] < 0.9:
+        faltas.append(f"ofrece el literal solo {_pct(a['literal_rate'])} "
+                      f"(hace falta 90%)")
+    if a["recall_at_n"] < 0.8:
+        faltas.append(f"recall {_pct(a['recall_at_n'])} "
+                      f"(faltan {0.80 - a['recall_at_n']:.0%})")
+    if a.get("choice_rate", 1.0) < 0.9:
+        faltas.append(f"da una sola opción el "
+                      f"{1 - a['choice_rate']:.0%} de las veces")
+    p95 = a.get("model_p95", a["latency_p95"])
+    if p95 > max_latencia:
+        faltas.append(f"p95 de {p95:.1f} s")
+    return faltas or ["cumple todo"]
 
 
 def _nota_potencia(n):

@@ -107,6 +107,31 @@ CANDIDATE_MODELS: dict[str, dict] = {
                "explica, el mecanismo sigue sin identificarse y hay que "
                "decirlo así",
     },
+    "qwen2.5:0.5b-instruct-fp16": {
+        "size_gb": 1.0, "params": "0.5B", "license": "Apache-2.0",
+        "why": "el 0.5b SIN cuantizar. Con el q4 forma el par que aisla la "
+               "precision en el extremo chico, donde en teoria mas deberia "
+               "doler el redondeo",
+    },
+    "qwen2.5:1.5b-instruct-q8_0": {
+        "size_gb": 1.6, "params": "1.5B", "license": "Apache-2.0",
+        "why": "el escalon intermedio de precision del 1.5b",
+    },
+    "qwen2.5:1.5b-instruct-fp16": {
+        "size_gb": 3.1, "params": "1.5B", "license": "Apache-2.0",
+        "why": "el 1.5b sin cuantizar: ocupa como un 3b en q8, asi que el par "
+               "contesta si conviene gastar los GB en parametros o en bits",
+    },
+    "llama3.1:8b": {
+        "size_gb": 4.9, "params": "8B", "license": "Llama 3.1",
+        "why": "el mas grande de la comparacion y el rival directo del 7b de "
+               "Qwen; Llama declara espanol como idioma soportado",
+    },
+    "mistral:7b": {
+        "size_gb": 4.4, "params": "7B", "license": "Apache-2.0",
+        "why": "cuarta familia a 7B, con licencia tan limpia como la de Qwen: "
+               "si gana, no hay excusa legal para no usarlo",
+    },
     "llama3.2:1b": {
         "size_gb": 1.3, "params": "1B", "license": "Llama 3.2",
         "why": "segunda familia al mismo tamaño; Llama 3.2 declara español "
