@@ -1,0 +1,247 @@
+/* El aparato. Oscuro a propósito y en una sola versión: se mira fijo durante
+ * minutos con los ojos, y un fondo claro a pantalla completa cansa. Los
+ * valores son los mismos que dibuja `ui.py` del lado nativo, para que lo que
+ * ve alguien acá sea lo que se midió allá.
+ *
+ * El acento verde azulado es lo ÚNICO saturado de la pantalla. Eso lo reserva
+ * para una sola cosa: dónde está la mirada y cuánto falta para que la celda
+ * dispare. Si el tablero entero fuera de colores, el avance de la permanencia
+ * sería un color más.
+ */
+
+:root {
+  --fondo: #0e141b;
+  --panel: #17202a;
+  --celda: #1f2b38;
+  --celda-ctrl: #1a242f;
+  --celda-viva: #2d4254;
+  --celda-hablar: #22383e;
+  --filo: #344658;
+  --texto: #e9f0f6;
+  --tenue: #8495a5;
+  --acento: #5eb6be;
+  --bien: #7ab893;
+  --mal: #d67b76;
+  --f-ui: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --f-dato: ui-monospace, "Cascadia Code", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--fondo); color: var(--texto);
+  font-family: var(--f-ui); line-height: 1.55;
+  overflow: hidden; -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* El video alimenta a MediaPipe; no se muestra. Un espejo del propio rostro
+ * en pantalla es una distracción enorme cuando hay que mirar celdas. */
+#video {
+  position: fixed; width: 2px; height: 2px;
+  opacity: 0; pointer-events: none; top: 0; left: 0;
+}
+
+.pantalla { position: fixed; inset: 0; }
+.pantalla[hidden] { display: none !important; }
+.centrada { display: grid; place-items: center; overflow-y: auto; }
+
+.caja {
+  max-width: 640px; width: 100%;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 32px;
+}
+.caja.estrecha { max-width: 460px; text-align: center; }
+
+h1 {
+  font-size: clamp(1.5rem, 4vw, 2rem); margin: 0 0 12px;
+  letter-spacing: -.02em; text-wrap: balance; font-weight: 600;
+}
+h2 { font-size: 1.2rem; margin: 0 0 10px; font-weight: 600; }
+p { margin: 0 0 14px; }
+.guia-texto { max-width: 58ch; color: #c6d2dc; }
+.tenue { color: var(--tenue); }
+.chico { font-size: .88rem; }
+.dato { font-family: var(--f-dato); }
+
+.privacidad {
+  background: #14303a; border-left: 3px solid var(--acento);
+  border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 18px 0;
+  font-size: .94rem;
+}
+.privacidad strong { color: var(--acento); }
+.privacidad .chico { display: block; margin-top: 6px; color: var(--tenue); }
+
+.pasos { margin: 0 0 18px; padding-left: 22px; color: #c6d2dc; }
+.pasos li { margin-bottom: 4px; }
+
+button.principal {
+  font: inherit; font-weight: 600; font-size: 1.05rem;
+  background: var(--acento); color: #06212a; border: 0;
+  border-radius: 11px; padding: 14px 30px; cursor: pointer;
+  margin-top: 8px;
+}
+button.principal:hover { filter: brightness(1.08); }
+button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* --------------------------------------------------------- colocación */
+.guia-marco {
+  position: relative; width: 190px; height: 240px; margin: 20px auto 16px;
+}
+.guia {
+  position: absolute; inset: 0;
+  border: 3px dashed var(--filo); border-radius: 50% / 42%;
+  transition: border-color .18s ease;
+}
+.guia.ok { border-color: var(--bien); border-style: solid; }
+.estado { min-height: 1.5em; color: #c6d2dc; }
+.barra {
+  height: 5px; background: var(--celda-ctrl); border-radius: 3px;
+  overflow: hidden; margin: 10px 0 16px;
+}
+.barra > div {
+  height: 100%; width: 0; background: var(--bien);
+  transition: width .1s linear;
+}
+
+/* -------------------------------------------------------- calibración */
+.calib-cabecera {
+  position: absolute; top: max(14px, env(safe-area-inset-top, 0px));
+  left: 0; right: 0; display: flex; justify-content: center; gap: 18px;
+  color: var(--tenue); font-size: .9rem;
+}
+.punto {
+  position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border-radius: 50%; background: var(--celda-ctrl);
+  border: 2px solid var(--filo);
+  display: grid; place-items: center;
+}
+.punto::before {
+  content: ""; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--tenue);
+}
+.punto.grabando { border-color: var(--acento); }
+.punto.grabando::before { background: var(--acento); }
+/* El anillo que se completa dice cuánto falta en este punto. Sin él, nueve
+   puntos idénticos se sienten eternos porque no hay señal de avance. */
+.punto.grabando::after {
+  content: ""; position: absolute; inset: -9px; border-radius: 50%;
+  background: conic-gradient(var(--acento) calc(var(--avance, 0) * 360deg),
+                             transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent 72%, #000 74%);
+          mask: radial-gradient(farthest-side, transparent 72%, #000 74%);
+}
+
+/* ------------------------------------------------------------ aparato */
+.aparato {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: max(10px, env(safe-area-inset-top, 0px))
+           max(10px, env(safe-area-inset-right, 0px))
+           max(10px, env(safe-area-inset-bottom, 0px))
+           max(10px, env(safe-area-inset-left, 0px));
+}
+.panel {
+  background: var(--panel); border-radius: 12px;
+  border-left: 4px solid var(--acento);
+  padding: 12px 20px; min-height: 11vh;
+  display: flex; align-items: center;
+}
+.mensaje {
+  font-size: clamp(1.1rem, 3.4vw, 2rem); font-weight: 600;
+  width: 100%; text-align: center; word-break: break-word;
+}
+.mensaje.vacio { color: var(--tenue); font-weight: 500; }
+
+.escena { flex: 1; min-height: 0; display: flex; }
+.grilla {
+  flex: 1; display: grid; gap: 8px;
+  grid-template-columns: repeat(var(--cols, 5), 1fr);
+}
+
+.celda {
+  position: relative; overflow: hidden;
+  background: var(--celda); border: 1px solid var(--filo);
+  border-radius: 12px; display: grid; place-items: center;
+  text-align: center; padding: 4px 8px;
+  font-weight: 600; font-size: clamp(.78rem, 2vw, 1.5rem);
+}
+/* Los controles van MÁS oscuros que el vocabulario: son herramientas, no es
+   lo que la persona quiere decir. Antes iban más claros, o sea al revés. */
+.celda.ctrl { background: var(--celda-ctrl); color: var(--tenue); }
+/* HABLAR es la excepción: es la celda que emite, y hundirla junto a BORRAR
+   la volvía lo más difícil de encontrar siendo lo más buscado. */
+.celda.hablar { background: var(--celda-hablar); color: var(--acento); }
+.celda.viva { background: var(--celda-viva); color: var(--texto); }
+
+/* Doble señal del avance: el relleno dice que el sistema te sigue a vos, el
+   trazo dice cuánto falta. Mirando el centro de la celda -que es lo que uno
+   hace- el trazo se percibe por el rabillo del ojo. */
+.celda .relleno {
+  position: absolute; inset: 0; background: var(--acento);
+  opacity: calc(var(--avance, 0) * .26);
+  pointer-events: none;
+}
+.celda .trazo {
+  position: absolute; left: 0; bottom: 0; height: 4px;
+  width: calc(var(--avance, 0) * 100%); background: var(--acento);
+  pointer-events: none;
+}
+.celda .etq { position: relative; }
+
+.candidatos {
+  flex: 1; display: flex; flex-direction: column; gap: 8px;
+}
+.candidatos .cab {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; padding: 0 4px 2px;
+}
+.candidatos .cab h2 { margin: 0; }
+.candidatos .sello {
+  font-family: var(--f-dato); font-size: .78rem; color: var(--tenue);
+}
+.opcion {
+  flex: 1; font-size: clamp(.95rem, 2.6vw, 1.5rem);
+  min-height: 56px;
+}
+.opcion.literal { background: var(--celda-ctrl); color: var(--tenue); }
+
+.medidor {
+  display: flex; gap: 20px; flex-wrap: wrap; justify-content: center;
+  background: var(--panel); border-radius: 10px; padding: 7px 14px;
+  font-family: var(--f-dato); font-size: .76rem; color: var(--tenue);
+}
+.medidor b { color: var(--texto); font-variant-numeric: tabular-nums; }
+
+/* El cursor va perfilado en oscuro porque cae encima de la etiqueta de la
+   celda -el centro es justo donde uno mira- y un aro claro sobre una letra
+   clara se confunde con la letra. */
+.cursor {
+  position: fixed; left: 0; top: 0; width: 26px; height: 26px;
+  margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 2px solid var(--acento); box-shadow: 0 0 0 3px var(--fondo);
+  pointer-events: none; z-index: 50;
+}
+.cursor::after {
+  content: ""; position: absolute; inset: 9px; border-radius: 50%;
+  background: var(--acento); box-shadow: 0 0 0 2px var(--fondo);
+}
+.cursor[hidden] { display: none; }
+
+.latido {
+  width: 13px; height: 13px; border-radius: 50%; background: var(--acento);
+  margin: 0 auto 20px; animation: latir 1.3s ease-in-out infinite;
+}
+@keyframes latir { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+
+@media (prefers-reduced-motion: reduce) {
+  .latido { animation: none; opacity: .8 }
+  .barra > div { transition: none }
+}
+
+@media (max-width: 560px) {
+  .celda { border-radius: 9px }
+  .grilla { gap: 5px }
+  .guia-marco { width: 150px; height: 190px }
+}
