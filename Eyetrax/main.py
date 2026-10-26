@@ -273,6 +273,22 @@ def main(argv: list[str] | None = None) -> int:
     p_board.add_argument("--no-log", action="store_true",
                          help="no guardar el CSV de la sesión")
 
+    p_pose = sub.add_parser(
+        "pose",
+        help="mide si el estimador consciente de pose aguanta mejor que la "
+             "persona se mueva: calibra, mide, pide moverse, mide de nuevo, "
+             "para los DOS estimadores")
+    _add_common(p_pose)
+    p_pose.add_argument("--rows", type=int, default=3)
+    p_pose.add_argument("--cols", type=int, default=3)
+    p_pose.add_argument("--hold", type=float, default=2.0)
+    p_pose.add_argument(
+        "--primero", default="base", choices=["base", "pose"],
+        help="con cuál empezar. Alternarlo entre repeticiones reparte el "
+             "efecto de la práctica, que si no se acumula en el segundo")
+    p_pose.add_argument("--informe", default=None,
+                        help="no medir: leer un JSON guardado y reimprimirlo")
+
     p_acc = sub.add_parser("accuracy",
                            help="mide el error y diagnostica qué mejorar")
     _add_common(p_acc)
@@ -337,6 +353,23 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         aac_board.run(settings, _make_tracker(args))
         return 0
+
+    if args.command == "pose":
+        from aac_eyetrax import experimento_pose, headaware
+
+        if args.informe:
+            print(experimento_pose.informe(
+                experimento_pose.cargar(args.informe)))
+            return 0
+        # `--head-aware` llega por herencia de _add_common y acá no significa
+        # nada: el experimento corre los DOS estimadores por definición. Se
+        # avisa en vez de ignorarlo en silencio.
+        if getattr(args, "head_aware", False):
+            print("[pose] --head-aware se ignora: este experimento corre los "
+                  "dos estimadores.")
+        return experimento_pose.run(
+            settings, headaware.make, rows=args.rows, cols=args.cols,
+            hold=args.hold, primero=args.primero)
 
     if args.command == "accuracy":
         from aac_eyetrax import accuracy
