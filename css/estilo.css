@@ -1,0 +1,270 @@
+/* Tablero de comunicación por mirada — interfaz del equipo.
+ *
+ * ## Por qué se ve como se ve
+ *
+ * Una versión anterior usaba azul pizarra con acento turquesa y tarjetas
+ * redondeadas con sombra. Se veía como un panel de control genérico. Tres
+ * cambios la acercan a un instrumento clínico:
+ *
+ * 1. **Grises neutros, sin tinte azul.** El azul pizarra es lo que delata a una
+ *    interfaz decorativa. El equipo médico usa negro y gris neutro porque no
+ *    compiten con la señal.
+ * 2. **Bordes de panel visibles, sin sombras.** Las celdas se separan por una
+ *    línea, como los módulos de un monitor, en vez de flotar sobre un fondo.
+ * 3. **Esquinas casi rectas.** Nada de píldoras: 3 px, lo justo para que no
+ *    corte.
+ *
+ * ## El verde no es decorativo
+ *
+ * Es el color convencional de "canal activo" en equipamiento médico, y además
+ * es el de mayor brillo percibido del espectro: el avance de la permanencia se
+ * ve por el rabillo del ojo mientras la persona mira el centro de la celda.
+ * Es el único color saturado de toda la pantalla, reservado a una sola cosa:
+ * dónde está la mirada y cuánto falta para que la celda dispare.
+ *
+ * ## Contraste
+ *
+ * Texto blanco puro sobre celdas oscuras. Quien usa esto lo mira fijo durante
+ * minutos y puede tener fatiga visual; el contraste pesa más que la sutileza.
+ */
+
+:root {
+  --fondo:        #0b0c0d;
+  --panel:        #141617;
+  --celda:        #1b1e1f;
+  --celda-ctrl:   #121415;
+  --celda-viva:   #262b2c;
+  --celda-emitir: #16211c;
+  --borde:        #32383a;
+  --borde-vivo:   #4a5355;
+  --texto:        #ffffff;
+  --tenue:        #8d9497;
+  --activo:       #3ecf8e;
+  --alerta:       #d9534f;
+  --f-ui: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --f-dato: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--fondo); color: var(--texto);
+  font-family: var(--f-ui); line-height: 1.5;
+  overflow: hidden; -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* El video alimenta al detector; no se muestra. Un espejo del propio rostro en
+   pantalla distrae enormemente cuando hay que mirar celdas. */
+#video {
+  position: fixed; width: 2px; height: 2px;
+  opacity: 0; pointer-events: none; top: 0; left: 0;
+}
+
+.pantalla { position: fixed; inset: 0; }
+.pantalla[hidden] { display: none !important; }
+.centrada { display: grid; place-items: center; overflow-y: auto; }
+
+.caja {
+  max-width: 660px; width: 100%;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 32px;
+}
+.caja.estrecha { max-width: 470px; text-align: center; }
+
+h1 {
+  font-size: clamp(1.4rem, 3.6vw, 1.85rem); margin: 0 0 14px;
+  font-weight: 600; letter-spacing: -.01em; text-wrap: balance;
+}
+h2 { font-size: 1.15rem; margin: 0 0 10px; font-weight: 600; }
+p { margin: 0 0 14px; }
+.guia-texto { max-width: 60ch; color: #c9ced0; }
+.tenue { color: var(--tenue); }
+.chico { font-size: .88rem; }
+.dato { font-family: var(--f-dato); }
+
+/* Bloque de información, marcado por una barra a la izquierda y no por un
+   relleno de color: la señal es la jerarquía, no el adorno. */
+.privacidad {
+  border-left: 3px solid var(--activo);
+  background: #111413;
+  padding: 14px 18px; margin: 20px 0; font-size: .94rem;
+}
+.privacidad strong { color: var(--activo); font-weight: 600; }
+.privacidad .chico { display: block; margin-top: 6px; color: var(--tenue); }
+
+.pasos { margin: 0 0 20px; padding-left: 20px; color: #c9ced0; }
+.pasos li { margin-bottom: 5px; }
+
+button.principal {
+  font: inherit; font-weight: 600; font-size: 1.05rem;
+  background: var(--activo); color: #06130d; border: 0;
+  border-radius: 3px; padding: 14px 32px; cursor: pointer;
+  margin-top: 10px; letter-spacing: .01em;
+}
+button.principal:hover { filter: brightness(1.1); }
+button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* ----------------------------------------------------------- colocación */
+.guia-marco {
+  position: relative; width: 190px; height: 240px; margin: 22px auto 16px;
+}
+.guia {
+  position: absolute; inset: 0;
+  border: 2px dashed var(--borde-vivo); border-radius: 50% / 42%;
+  transition: border-color .18s ease;
+}
+.guia.ok { border-color: var(--activo); border-style: solid; }
+.estado { min-height: 1.5em; color: #c9ced0; }
+.barra {
+  height: 4px; background: var(--celda-ctrl);
+  border: 1px solid var(--borde); overflow: hidden; margin: 12px 0 16px;
+}
+.barra > div {
+  height: 100%; width: 0; background: var(--activo);
+  transition: width .1s linear;
+}
+
+/* ---------------------------------------------------------- calibración */
+.calib-cabecera {
+  position: absolute; top: max(16px, env(safe-area-inset-top, 0px));
+  left: 0; right: 0; display: flex; justify-content: center; gap: 20px;
+  color: var(--tenue); font-size: .88rem;
+}
+.punto {
+  position: absolute; width: 32px; height: 32px; margin: -16px 0 0 -16px;
+  border-radius: 50%; background: var(--celda-ctrl);
+  border: 2px solid var(--borde-vivo);
+  display: grid; place-items: center;
+}
+.punto::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--tenue);
+}
+.punto.grabando { border-color: var(--activo); }
+.punto.grabando::before { background: var(--activo); }
+/* El anillo que se completa dice cuánto falta en este punto. Sin él, nueve
+   puntos idénticos se sienten eternos porque no hay señal de avance. */
+.punto.grabando::after {
+  content: ""; position: absolute; inset: -9px; border-radius: 50%;
+  background: conic-gradient(var(--activo) calc(var(--avance, 0) * 360deg),
+                             transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent 73%, #000 75%);
+          mask: radial-gradient(farthest-side, transparent 73%, #000 75%);
+}
+
+/* --------------------------------------------------------------- equipo */
+.aparato {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: max(8px, env(safe-area-inset-top, 0px))
+           max(8px, env(safe-area-inset-right, 0px))
+           max(8px, env(safe-area-inset-bottom, 0px))
+           max(8px, env(safe-area-inset-left, 0px));
+}
+.panel {
+  background: var(--panel); border: 1px solid var(--borde);
+  border-left: 3px solid var(--activo);
+  border-radius: 3px; padding: 12px 20px; min-height: 11vh;
+  display: flex; align-items: center;
+}
+.mensaje {
+  font-size: clamp(1.1rem, 3.4vw, 2rem); font-weight: 600;
+  width: 100%; text-align: center; word-break: break-word;
+}
+.mensaje.vacio { color: var(--tenue); font-weight: 400; }
+
+.escena { flex: 1; min-height: 0; display: flex; }
+.grilla {
+  flex: 1; display: grid; gap: 6px;
+  grid-template-columns: repeat(var(--cols, 5), 1fr);
+}
+
+.celda {
+  position: relative; overflow: hidden;
+  background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; display: grid; place-items: center;
+  text-align: center; padding: 4px 8px;
+  font-weight: 600; font-size: clamp(.78rem, 2vw, 1.5rem);
+  letter-spacing: .01em;
+}
+/* Los controles van MÁS oscuros que el vocabulario: son herramientas, no es
+   lo que la persona quiere decir. */
+.celda.ctrl { background: var(--celda-ctrl); color: var(--tenue); }
+/* HABLAR es la excepción: es la celda que emite, y hundirla junto a BORRAR
+   la volvía lo más difícil de encontrar siendo lo más buscado. */
+.celda.hablar {
+  background: var(--celda-emitir); color: var(--activo);
+  border-color: #2d4a3c;
+}
+.celda.viva { background: var(--celda-viva); border-color: var(--borde-vivo); }
+
+/* Doble señal del avance: el relleno dice que el sistema sigue a esta persona,
+   el trazo dice cuánto falta. Mirando el centro de la celda -que es lo que uno
+   hace- el trazo se percibe por el rabillo del ojo. */
+.celda .relleno {
+  position: absolute; inset: 0; background: var(--activo);
+  opacity: calc(var(--avance, 0) * .20); pointer-events: none;
+}
+.celda .trazo {
+  position: absolute; left: 0; bottom: 0; height: 4px;
+  width: calc(var(--avance, 0) * 100%); background: var(--activo);
+  pointer-events: none;
+}
+.celda .etq { position: relative; }
+
+.candidatos { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.candidatos .cab {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; padding: 2px 4px 4px;
+}
+.candidatos .cab h2 { margin: 0; }
+.candidatos .sello {
+  font-family: var(--f-dato); font-size: .76rem; color: var(--tenue);
+}
+.opcion { flex: 1; font-size: clamp(.95rem, 2.6vw, 1.5rem); min-height: 56px; }
+.opcion.literal { background: var(--celda-ctrl); color: var(--tenue); }
+
+/* Lectura de estado, como el pie de un instrumento: cifras monoespaciadas,
+   alineadas, sin color. */
+.medidor {
+  display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;
+  background: var(--panel); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 6px 14px;
+  font-family: var(--f-dato); font-size: .74rem; color: var(--tenue);
+  letter-spacing: .02em;
+}
+.medidor b { color: var(--texto); font-variant-numeric: tabular-nums; }
+
+/* El cursor va perfilado en oscuro porque cae encima de la etiqueta de la
+   celda -el centro es justo donde uno mira- y un aro claro sobre una letra
+   clara se confunde con la letra. */
+.cursor {
+  position: fixed; left: 0; top: 0; width: 24px; height: 24px;
+  margin: -12px 0 0 -12px; border-radius: 50%;
+  border: 2px solid var(--activo); box-shadow: 0 0 0 3px var(--fondo);
+  pointer-events: none; z-index: 50;
+}
+.cursor::after {
+  content: ""; position: absolute; inset: 8px; border-radius: 50%;
+  background: var(--activo); box-shadow: 0 0 0 2px var(--fondo);
+}
+.cursor[hidden] { display: none; }
+
+.latido {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--activo);
+  margin: 0 auto 22px; animation: latir 1.3s ease-in-out infinite;
+}
+@keyframes latir { 0%, 100% { opacity: .22 } 50% { opacity: 1 } }
+
+@media (prefers-reduced-motion: reduce) {
+  .latido { animation: none; opacity: .8 }
+  .barra > div, .guia { transition: none }
+}
+
+@media (max-width: 560px) {
+  .grilla { gap: 4px }
+  .guia-marco { width: 150px; height: 190px }
+  .medidor { gap: 14px }
+}
