@@ -19,29 +19,32 @@
   <div class="caja">
     <h1>Tablero de comunicación por mirada</h1>
     <p class="guia-texto">
-      Este es el dispositivo completo: detecta dónde mirás con la cámara y
-      selecciona celdas cuando sostenés la mirada sobre una. Después, un modelo
+      Este es el dispositivo completo: detecta hacia dónde mira la persona
+      mediante la cámara y selecciona una celda cuando sostiene la mirada
+      sobre ella. Después, un modelo
       de lenguaje convierte las palabras sueltas en frases.
     </p>
 
     <div class="privacidad">
       <strong>Todo corre en tu máquina.</strong>
       El video se procesa cuadro a cuadro en el navegador y se descarta: no se
-      sube, no se graba, no sale de acá. Lo que escribas tampoco.
+      transmite, no se almacena y no sale de este equipo. El texto compuesto
+      tampoco.
       <span id="webgpu" class="chico"></span>
     </div>
 
     <ol class="pasos">
-      <li>Dar permiso de cámara.</li>
-      <li>Acomodar la cara en la guía.</li>
-      <li>Mirar nueve puntos, uno por uno. Toma un minuto.</li>
-      <li>Usar el tablero.</li>
+      <li>Autorizar el uso de la cámara.</li>
+      <li>Ubicar el rostro dentro de la guía.</li>
+      <li>Observar nueve puntos, uno por uno. Requiere un minuto.</li>
+      <li>Utilizar el tablero.</li>
     </ol>
 
     <p class="chico tenue">
-      Hace falta buena luz de frente y quedarse razonablemente quieto. La
-      calibración es obligatoria cada vez: entre una sesión y otra te moviste,
-      y una calibración vieja arrastra un error que ningún filtro corrige.
+      Se requiere iluminación frontal adecuada y mantenerse razonablemente
+      quieto. La calibración es obligatoria en cada sesión: la postura nunca
+      se repite con exactitud, y una calibración previa arrastra un error
+      sistemático que ningún filtro corrige.
     </p>
 
     <button id="btn-empezar" class="principal">Empezar</button>
@@ -53,8 +56,8 @@
   <div class="caja estrecha">
     <div class="latido"></div>
     <h2>Esperando la cámara</h2>
-    <p class="tenue">El navegador va a pedirte permiso. Es necesario para
-      estimar dónde mirás.</p>
+    <p class="tenue">El navegador solicitará autorización. Es necesaria para
+      estimar la dirección de la mirada.</p>
   </div>
 </section>
 
@@ -67,8 +70,8 @@
     </div>
     <p id="colocacion-estado" class="estado">Buscando su cara…</p>
     <div class="barra"><div id="colocacion-barra"></div></div>
-    <p class="chico tenue">Quedate en esta posición durante toda la sesión. Si
-      te movés mucho después de calibrar, la precisión cae.</p>
+    <p class="chico tenue">Permanezca en esta posición durante toda la sesión. Si
+      se desplaza después de calibrar, la precisión disminuye.</p>
   </div>
 </section>
 
