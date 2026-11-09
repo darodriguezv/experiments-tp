@@ -213,5 +213,31 @@ export function informe(prueba) {
     : r.temblor > r.sesgo
       ? "Domina el TEMBLOR: la mirada es ruidosa. El suavizado no alcanza."
       : "Sesgo y temblor son comparables.");
+
+  /* El desvío de CADA punto, con signo. Es lo que distingue dos fallos que el
+   * promedio del sesgo confunde:
+   *
+   * - todos corridos en la MISMA dirección: desplazamiento uniforme, que es un
+   *   error de coordenadas y se puede localizar;
+   * - corridos HACIA el centro, más cuanto más lejos del centro: el modelo
+   *   colapsó y no sigue la mirada.
+   *
+   * Sin el signo, 300 px de sesgo se ven iguales en los dos casos. */
+  L.push("");
+  L.push("desvío por punto (x, y), en px:");
+  for (const p of r.por_punto) {
+    const sx = p.dx >= 0 ? "+" : "";
+    const sy = p.dy >= 0 ? "+" : "";
+    L.push(`  (${String(p.x).padStart(4)},${String(p.y).padStart(4)})`
+         + `  ${sx}${p.dx}, ${sy}${p.dy}`);
+  }
+  const mdx = r.por_punto.reduce((a, p) => a + p.dx, 0) / r.por_punto.length;
+  const mdy = r.por_punto.reduce((a, p) => a + p.dy, 0) / r.por_punto.length;
+  L.push("");
+  L.push(`desvío PROMEDIO: ${mdx >= 0 ? "+" : ""}${mdx.toFixed(0)}, `
+       + `${mdy >= 0 ? "+" : ""}${mdy.toFixed(0)} px`);
+  L.push(Math.hypot(mdx, mdy) > 0.6 * r.sesgo
+    ? "Los nueve están corridos en la MISMA dirección: desplazamiento uniforme."
+    : "No hay una dirección común: el error cambia según la zona.");
   return L.join("\n");
 }
