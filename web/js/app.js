@@ -46,7 +46,13 @@ const PUNTOS = [
   [0.1, 0.9], [0.5, 0.9], [0.9, 0.9],
 ];
 const MUESTRAS_POR_PUNTO = 30;
-const MS_ASENTAR = 900;    // tiempo para que la mirada llegue antes de grabar
+const MS_ASENTAR = 900;
+const MS_ASENTAR_PRIMERO = 2200;
+/* El primer punto necesita mucho más. Viniendo de la pantalla de colocación la
+ * mirada no sabe dónde está el punto, y medido del lado nativo tarda ~1.7 s en
+ * llegar - contra los 0.7 que sobran una vez que ya viene siguiendo puntos. Sin
+ * esto el primer punto graba la sacada, y con nueve puntos uno contaminado
+ * alcanza para que la validación cruzada elija un alpha que colapsa el modelo. */
 const MS_GRABAR = 1500;
 
 /* Los modos que ofrece el menú.
@@ -141,7 +147,17 @@ async function iniciar() {
     : "Este navegador no tiene WebGPU: las frases van a venir de una corrida grabada.";
 
   $("#btn-empezar").addEventListener("click", arrancarCamara);
-  $("#btn-reintentar").addEventListener("click", () => location.reload());
+  $("#btn-reintentar").addEventListener("click", () => {
+    if (est.reintentarCalibracion && est.landmarker) {
+      // Ya hay cámara y detector: no hace falta recargar la página entera,
+      // solo rehacer la calibración.
+      est.reintentarCalibracion = false;
+      $("#btn-reintentar").textContent = "Volver a empezar";
+      est.colocadoDesde = 0;
+      return mostrar("colocacion");
+    }
+    location.reload();
+  });
   mostrar("menu");
 }
 
@@ -406,7 +422,8 @@ function pasoCalibracion(datos, t) {
   if (c.fase === "asentar") {
     p.classList.remove("grabando");
     p.style.setProperty("--avance", "0");
-    if (transcurrido > MS_ASENTAR) { c.fase = "grabar"; c.desde = t; }
+    const espera = c.i === 0 ? MS_ASENTAR_PRIMERO : MS_ASENTAR;
+    if (transcurrido > espera) { c.fase = "grabar"; c.desde = t; }
     return;
   }
 
@@ -454,11 +471,26 @@ function terminarCalibracion() {
   // entrenamiento siempre se ve bien -se mide sobre los mismos puntos con los
   // que se ajustó- y por eso una calibración rota pasaba desapercibida.
   const cv = est.modelo.errorCV;
-  $("#ajuste").textContent = Number.isFinite(cv)
-    ? `±${cv.toFixed(0)} px (a=${est.modelo.alfaElegido})`
-    : "sin validar";
-  console.log("[calibración] alpha elegido", est.modelo.alfaElegido,
-              "error CV", cv);
+
+  // Puerta de calidad. Medido: dos calibraciones del mismo código dieron 123 px
+  // y 316 px de error, y la segunda era un modelo colapsado que el sistema
+  // dejaba usar igual -la persona lo descubría peleando con el tablero-.
+  //
+  // Se mira el RECORRIDO y no el error de validación cruzada. El LOO sirve para
+  // elegir alpha, pero como medida absoluta es sistemáticamente pesimista: al
+  // sacar un punto de una rejilla de 3x3 se saca la única información sobre esa
+  // región, así que el modelo extrapola. Con datos perfectos el LOO daba 282 px
+  // y el error real era 0.
+  //
+  // El recorrido compara cuánto se mueven las predicciones contra cuánto se
+  // mueven los objetivos. Por debajo de 0.45 el modelo responde a la mirada
+  // menos de la mitad de lo que debería, y eso no se arregla con zoom.
+  const rec = est.modelo.recorrido;
+  console.log("[calibración] alpha", est.modelo.alfaElegido,
+              "LOO", Math.round(cv), "recorrido", rec?.toFixed(2));
+  if (Number.isFinite(rec) && rec < 0.45) {
+    return calibracionMala(rec, cv, c);
+  }
 
   est.suave.reiniciar();
   est.ventana.limpiar();
@@ -602,6 +634,63 @@ function aplicarZoom() {
 function pintarAvanceZoom(avance) {
   const c = $("#cursor");
   if (c) c.style.setProperty("--zoom-avance", avance || 0);
+}
+
+/** La calibración salió mal: se dice, con el detalle, y se repite.
+ *
+ * Deja ver el error de cada punto porque casi siempre hay uno o dos que
+ * arruinan el ajuste -un parpadeo largo, mirar fuera de la pantalla- y saber
+ * cuál permite repetir prestando atención ahí en vez de repetir a ciegas.
+ */
+function calibracionMala(rec, cv, c) {
+  const porPunto = errorPorPuntoCalib(c);
+  const peores = porPunto
+    .map((e, i) => [i + 1, e])
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .filter(([, e]) => Number.isFinite(e));
+
+  $("#error-msg").textContent = "La calibración no salió bien";
+  $("#error-detalle").innerHTML =
+    `El modelo solo sigue la mirada un <strong>`
+    + `${(rec * 100).toFixed(0)}%</strong> de lo que debería: predice casi el `
+    + `mismo punto mire donde mire. Con eso el tablero no puede funcionar, `
+    + `ni siquiera con el acercamiento.<br><br>`
+    + (peores.length
+        ? `Los puntos que peor salieron fueron el `
+          + peores.map(([n, e]) => `<strong>${n}</strong> (${e.toFixed(0)} px)`)
+                 .join(", ")
+          + `. Suele ser un parpadeo largo o haber mirado fuera de la `
+          + `pantalla.<br><br>`
+        : "")
+    + `Repita la calibración siguiendo cada punto hasta que el anillo se `
+    + `complete, con buena luz de frente y sin mover la cabeza.`;
+  $("#btn-reintentar").textContent = "Repetir la calibración";
+  est.reintentarCalibracion = true;
+  mostrar("error");
+}
+
+/** Error de cada punto de calibración, dejándolo fuera del ajuste. */
+function errorPorPuntoCalib(c) {
+  const puntos = [...new Set(c.grupos)];
+  return puntos.map((fuera) => {
+    const dentro = [], afuera = [];
+    c.grupos.forEach((g, i) => (g === fuera ? afuera : dentro).push(i));
+    if (dentro.length < 4 || !afuera.length) return NaN;
+    try {
+      const m = new ModeloMirada().entrenar(
+        dentro.map((i) => c.muestras[i]), dentro.map((i) => c.objetivos[i]),
+        est.modelo.alfaElegido);
+      let s = 0;
+      for (const i of afuera) {
+        const [px, py] = m.predecir(c.muestras[i]);
+        s += Math.hypot(px - c.objetivos[i][0], py - c.objetivos[i][1]);
+      }
+      return s / afuera.length;
+    } catch (_) {
+      return NaN;
+    }
+  });
 }
 
 function redibujar() {

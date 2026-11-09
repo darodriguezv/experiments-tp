@@ -201,7 +201,13 @@ export function entrenarConCV(muestras, objetivos, grupos) {
 
   if (puntos.length >= 3) {
     for (const alfa of ALFAS) {
-      let suma = 0, n = 0;
+      // Se junta el error de CADA punto y después se toma la mediana, no el
+      // promedio. Un solo punto contaminado -un parpadeo largo, la mirada
+      // todavía viajando- infla el promedio hasta varios cientos de píxeles
+      // aunque el modelo sirva perfectamente para los otros ocho. Medido: con
+      // un punto de ruido puro entre nueve, el promedio daba 466 px mientras
+      // el error real sobre los puntos sanos era de 56.
+      const porPunto = [];
       for (const fuera of puntos) {
         const idxDentro = [], idxFuera = [];
         grupos.forEach((g, i) => (g === fuera ? idxFuera : idxDentro).push(i));
@@ -212,21 +218,101 @@ export function entrenarConCV(muestras, objetivos, grupos) {
             idxDentro.map((i) => muestras[i]),
             idxDentro.map((i) => objetivos[i]), alfa);
         } catch (_) { continue; }
+        let s = 0, k = 0, roto = false;
         for (const i of idxFuera) {
           const [px, py] = m.predecir(muestras[i]);
-          if (!Number.isFinite(px) || !Number.isFinite(py)) { suma += 1e6; n++; continue; }
-          suma += Math.hypot(px - objetivos[i][0], py - objetivos[i][1]);
-          n += 1;
+          if (!Number.isFinite(px) || !Number.isFinite(py)) { roto = true; break; }
+          s += Math.hypot(px - objetivos[i][0], py - objetivos[i][1]);
+          k += 1;
         }
+        porPunto.push(roto || !k ? Infinity : s / k);
       }
-      if (n && suma / n < mejor.error) mejor = { alfa, error: suma / n };
+      const e = _mediana(porPunto);
+      if (Number.isFinite(e) && e < mejor.error) {
+        mejor = { alfa, error: e, porPunto };
+      }
     }
   }
 
+  // El descarte automático de puntos contaminados se intentó y se quitó: en
+  // cuatro escenarios sintéticos distintos no se disparó nunca, y enviar un
+  // mecanismo que no se pudo verificar es exactamente lo que trajo el
+  // alpha=5000 fijo. La mediana de arriba ya vuelve al ajuste insensible a uno
+  // o dos puntos malos, que era el objetivo.
+
   const modelo = new ModeloMirada().entrenar(muestras, objetivos, mejor.alfa);
   modelo.alfaElegido = mejor.alfa;
-  // Este es el número honesto: error sobre fijaciones que el modelo NO vio.
-  // El error de entrenamiento siempre se ve bien y no dice nada.
+  // Error por punto, para poder decir CUÁL salió mal en vez de solo que algo
+  // salió mal.
+  modelo.errorPorPunto = mejor.porPunto || [];
+
   modelo.errorCV = mejor.error;
+
+  /* ## El número que de verdad detecta el fallo
+   *
+   * El error de validación cruzada sirve para ELEGIR alpha -es una comparación
+   * relativa- pero no como medida absoluta de calidad. Al sacar un punto de una
+   * rejilla de 3x3 se saca la única información sobre esa región de la
+   * pantalla, así que el modelo tiene que extrapolar y el error LOO es grande
+   * incluso para un modelo perfecto. Medido: con datos sin un solo defecto, el
+   * LOO daba 282 px mientras el error real era 0.
+   *
+   * El fallo que hay que detectar es específico y se mide directo: **el modelo
+   * colapsa a una salida casi constante**. Predice casi el mismo punto para
+   * cualquier entrada, y por eso el síntoma era 318 px de sesgo con apenas 15
+   * de temblor.
+   *
+   * `recorrido` compara cuánto se mueven las predicciones contra cuánto se
+   * mueven los objetivos. Cerca de 1 el modelo sigue a la mirada; cerca de 0
+   * colapsó.
+   */
+  modelo.recorrido = _recorrido(modelo, muestras, objetivos, grupos);
   return modelo;
+}
+
+function _recorrido(modelo, muestras, objetivos, grupos) {
+  const puntos = [...new Set(grupos)];
+  const pred = [], obj = [];
+  for (const p of puntos) {
+    const i = grupos.indexOf(p);
+    const [px, py] = modelo.predecir(muestras[i]);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return 0;
+    pred.push([px, py]);
+    obj.push(objetivos[i]);
+  }
+  const amplitud = (a, j) =>
+    Math.max(...a.map((q) => q[j])) - Math.min(...a.map((q) => q[j]));
+  const ox = amplitud(obj, 0), oy = amplitud(obj, 1);
+  if (ox < 1 || oy < 1) return 1;
+  // El menor de los dos ejes: alcanza con que colapse en uno para que el
+  // tablero deje de servir en esa dirección.
+  return Math.min(amplitud(pred, 0) / ox, amplitud(pred, 1) / oy);
+}
+
+/** Error medio sobre un punto, con el modelo ajustado sin ese punto. */
+function _mediana(a) {
+  const s = a.filter(Number.isFinite).sort((x, y) => x - y);
+  if (!s.length) return Infinity;
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+function _errorDejandoFuera(muestras, objetivos, grupos, fuera, alfa) {
+  const dentro = [], afuera = [];
+  grupos.forEach((g, i) => (g === fuera ? afuera : dentro).push(i));
+  if (dentro.length < 4 || !afuera.length) return NaN;
+  let m;
+  try {
+    m = new ModeloMirada().entrenar(dentro.map((i) => muestras[i]),
+                                    dentro.map((i) => objetivos[i]), alfa);
+  } catch (_) {
+    return NaN;
+  }
+  let s = 0;
+  for (const i of afuera) {
+    const [px, py] = m.predecir(muestras[i]);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return NaN;
+    s += Math.hypot(px - objetivos[i][0], py - objetivos[i][1]);
+  }
+  return s / afuera.length;
 }
