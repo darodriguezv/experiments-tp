@@ -30,7 +30,8 @@ import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
 import { SLM } from "./slm.js";
 import { Zoom, DWELL_ACERCAR_MS } from "./zoom.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
-         informe as informePrecision } from "./precision.js";
+         zoomNecesario, informe as informePrecision }
+  from "./precision.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18";
 const MODELO_CARA =
@@ -542,15 +543,31 @@ function mostrarResultado() {
 
   const tabla = $("#res-tabla");
   const filas = aciertoPorGrilla(prueba);
+  const conZoom = aciertoPorGrilla(prueba, est.zoom.factor);
   tabla.innerHTML = "<tr><th>grilla</th><th>celda</th>"
-                  + "<th class='num'>acierta</th></tr>";
-  for (const f of filas) {
+                  + "<th class='num'>sola</th>"
+                  + `<th class='num'>con zoom ${est.zoom.factor}x</th></tr>`;
+  filas.forEach((f, i) => {
+    const z = conZoom[i];
     const tr = document.createElement("tr");
-    if (f.acierto >= 0.9) tr.className = "bien";
-    else if (f.acierto < 0.7) tr.className = "mal";
+    if (z.acierto >= 0.9) tr.className = "bien";
+    else if (z.acierto < 0.7) tr.className = "mal";
     tr.innerHTML = `<td>${f.grilla}</td><td class="num">${f.celda}</td>`
-                 + `<td class="num">${Math.round(f.acierto * 100)}%</td>`;
+                 + `<td class="num">${Math.round(f.acierto * 100)}%</td>`
+                 + `<td class="num">${Math.round(z.acierto * 100)}%</td>`;
     tabla.appendChild(tr);
+  });
+
+  // Cuánto habría que acercar para llegar al 90% sobre la grilla de 5x5. Es
+  // la única perilla que queda: el error ya está medido y no se va a mover.
+  const k = zoomNecesario(prueba, 5, 5, 0.9);
+  const nota = $("#res-nota");
+  if (nota) {
+    nota.textContent = Number.isFinite(k)
+      ? `Para acertar el 90% sobre la grilla de 5x5 hace falta acercar `
+        + `${k.toFixed(2)}x. Ahora está configurado en ${est.zoom.factor}x.`
+      : "Ni acercando 8x se llega al 90%: el error es demasiado grande para "
+        + "esta grilla.";
   }
   est.ultimoResultado = [
     informePrecision(prueba),

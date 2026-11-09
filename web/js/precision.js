@@ -90,6 +90,11 @@ export class PruebaPrecision {
       sesgo: Math.hypot(mx - tx, my - ty),
       temblor: mediana(this.buffer.map((p) => Math.hypot(p[0] - mx, p[1] - my))),
       err: this.buffer.map((p) => Math.hypot(p[0] - tx, p[1] - ty)),
+      // Por muestra y por eje: una celda es más ancha que alta, así que lo que
+      // decide si se acierta no es el error radial sino cada eje contra su
+      // propio semieje.
+      dxs: this.buffer.map((p) => Math.abs(p[0] - tx)),
+      dys: this.buffer.map((p) => Math.abs(p[1] - ty)),
       dx: mx - tx, dy: my - ty,
     });
   }
@@ -120,36 +125,53 @@ export class PruebaPrecision {
   }
 }
 
-/** Qué se puede esperar del tablero con este error, por tamaño de grilla. */
-export function aciertoPorGrilla(prueba) {
+/** Qué se puede esperar del tablero con este error, por tamaño de grilla.
+ *
+ * Se evalúa cada eje contra su propio semieje -|dx| < ancho/2 Y |dy| < alto/2-
+ * y no el error radial contra el semieje más corto, que es lo que hacía la
+ * primera versión. Para una celda de 307x126 eso exigía caer dentro de 63 px
+ * en cualquier dirección, cuando horizontalmente hay 153 px de margen: la
+ * tabla salía mucho más pesimista que la realidad.
+ */
+export function aciertoPorGrilla(prueba, factorZoom = 1) {
   const validos = prueba.porPunto.filter((p) => p.n > 0);
-  const dxs = [], dys = [];
-  for (const p of validos) {
-    for (const [i] of p.err.entries()) void i;
-  }
-  // Se usan los desvíos crudos de cada muestra respecto del objetivo, no los
-  // sesgos medianos: lo que decide si una celda se acierta es dónde cae CADA
-  // mirada, no dónde cae el promedio.
-  for (const p of validos) {
-    dxs.push(Math.abs(p.dx)); dys.push(Math.abs(p.dy));
-  }
+  const dxs = validos.flatMap((p) => p.dxs || []);
+  const dys = validos.flatMap((p) => p.dys || []);
   const filas = [];
   for (const [cols, fils] of [[5, 5], [4, 4], [3, 3], [3, 2], [2, 2]]) {
-    const w = innerWidth / cols, h = (innerHeight * 0.855) / fils;
-    let dentro = 0, total = 0;
-    for (const p of validos) {
-      for (const e of p.err) {
-        total += 1;
-        // Aproximación isotrópica: se usa el error radial contra el semieje
-        // más corto, que es el que ata.
-        if (e < Math.min(w, h) / 2) dentro += 1;
-      }
+    const w = (innerWidth / cols) * factorZoom;
+    const h = ((innerHeight * 0.855) / fils) * factorZoom;
+    let dentro = 0;
+    for (let i = 0; i < dxs.length; i++) {
+      if (dxs[i] < w / 2 && dys[i] < h / 2) dentro += 1;
     }
     filas.push({ grilla: `${cols}x${fils}`,
                  celda: `${Math.round(w)}x${Math.round(h)}`,
-                 acierto: total ? dentro / total : 0 });
+                 acierto: dxs.length ? dentro / dxs.length : 0 });
   }
   return filas;
+}
+
+/**
+ * Cuánto hay que acercar para que una grilla llegue a cierto acierto.
+ *
+ * Es la pregunta de diseño que importa: el error ya está medido y no se va a
+ * mover, así que lo único ajustable es cuánto crece la celda.
+ */
+export function zoomNecesario(prueba, cols, fils, objetivo = 0.9) {
+  const validos = prueba.porPunto.filter((p) => p.n > 0);
+  const dxs = validos.flatMap((p) => p.dxs || []);
+  const dys = validos.flatMap((p) => p.dys || []);
+  if (!dxs.length) return NaN;
+  for (let k = 1; k <= 8; k += 0.25) {
+    const w = (innerWidth / cols) * k, h = ((innerHeight * 0.855) / fils) * k;
+    let dentro = 0;
+    for (let i = 0; i < dxs.length; i++) {
+      if (dxs[i] < w / 2 && dys[i] < h / 2) dentro += 1;
+    }
+    if (dentro / dxs.length >= objetivo) return k;
+  }
+  return NaN;   // ni acercando 8x alcanza
 }
 
 function mediana(a) {
