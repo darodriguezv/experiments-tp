@@ -359,3 +359,35 @@ h3.sub {
                 font-variant-numeric: tabular-nums; }
 .tabla tr.bien td { color: var(--activo); }
 .tabla tr.mal td.num { color: var(--alerta); }
+
+/* ------------------------------------------------------------- zoom */
+/* La grilla crece alrededor del punto mirado. La transición importa: un salto
+   instantáneo rompe la conexión espacial y obliga a buscar todo de nuevo. */
+.grilla {
+  transition: transform .18s cubic-bezier(.2, .7, .3, 1);
+  will-change: transform;
+}
+.escena { overflow: hidden; }
+
+.zoom-ind {
+  position: fixed; right: max(14px, env(safe-area-inset-right, 0px));
+  top: max(14px, env(safe-area-inset-top, 0px));
+  font-family: var(--f-dato); font-size: .76rem; letter-spacing: .06em;
+  color: var(--activo); background: var(--panel);
+  border: 1px solid var(--borde); border-radius: 3px; padding: 3px 9px;
+  z-index: 60; pointer-events: none;
+}
+.zoom-ind[hidden] { display: none; }
+
+/* Mientras se acumula el acercamiento, el cursor engorda su aro: es la única
+   señal de que algo está por pasar cuando todavía no hay celda elegida. */
+.cursor::before {
+  content: ""; position: absolute; inset: -6px; border-radius: 50%;
+  border: 2px solid var(--activo);
+  opacity: calc(var(--zoom-avance, 0) * .85);
+  transform: scale(calc(1 - var(--zoom-avance, 0) * .25));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grilla { transition: none }
+}

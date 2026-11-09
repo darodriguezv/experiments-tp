@@ -28,6 +28,7 @@ import { Suavizador, VentanaMediana } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
 import { SLM } from "./slm.js";
+import { Zoom, DWELL_ACERCAR_MS } from "./zoom.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
          informe as informePrecision } from "./precision.js";
 
@@ -89,6 +90,11 @@ const est = {
   suave: new Suavizador(),
   ventana: new VentanaMediana(320),
   dwell: new Permanencia(),
+  // Dos permanencias distintas: acercar es barato de equivocar,
+  // elegir no. Ver zoom.js.
+  dwellZoom: new Permanencia({ dwellMs: DWELL_ACERCAR_MS,
+                               refractarioMs: 250 }),
+  zoom: new Zoom(),
   slm: null,
   pagina: "core", palabras: [], letras: "",
   cajas: new Map(),
@@ -552,10 +558,35 @@ function mostrarResultado() {
   mostrar("resultado");
 }
 
+/* ------------------------------------------------------------- zoom */
+
+function aplicarZoom() {
+  const g = $("#escena").firstElementChild;
+  if (!g) return;
+  Object.assign(g.style, est.zoom.estilo());
+  // Las cajas hay que volver a medirlas: getBoundingClientRect() ya tiene en
+  // cuenta la transformación, así que el impacto sobre las celdas funciona
+  // solo, pero con los valores viejos apuntaría a donde estaban antes.
+  est.cajas = medir($("#escena"));
+  const ind = $("#zoom-ind");
+  if (ind) {
+    ind.hidden = !est.zoom.acercado;
+    ind.textContent = est.zoom.acercado
+      ? `${est.zoom.escala.toFixed(1)}x` : "";
+  }
+}
+
+/** El anillo del cursor se completa mientras se acumula el acercamiento. */
+function pintarAvanceZoom(avance) {
+  const c = $("#cursor");
+  if (c) c.style.setProperty("--zoom-avance", avance || 0);
+}
+
 function redibujar() {
   const cont = $("#escena");
   if (est.candidatos) dibujarCandidatos(cont);
   else { dibujarPagina(cont, est.pagina); }
+  aplicarZoom();
   est.cajas = medir(cont);
   pintarMensaje();
 }
@@ -595,6 +626,35 @@ function pasoTablero(datos, dt, t) {
     }
   }
 
+  // --- primer tiempo: acercar donde cae la mirada ----------------------
+  if (!est.zoom.acercado && !est.candidatos) {
+    const z = est.dwellZoom.paso(
+      muestra,
+      // Cualquier punto sobre la grilla sirve: no se elige una región de una
+      // lista, se acerca donde está mirando. Por eso no puede fallar.
+      (x, y) => (golpearEn(est.cajas, x, y) ? "grilla" : null),
+      () => ({ left: 0, top: 0, right: innerWidth, bottom: innerHeight,
+               width: innerWidth, height: innerHeight }));
+    pintarAvanceZoom(z.avance);
+    if (z.disparo) {
+      est.zoom.acercar(muestra.x, muestra.y, t);
+      aplicarZoom();
+      est.dwell.reiniciar();
+      est.dwell.bloquear(200);
+    }
+    return;
+  }
+
+  // Si se acercó a la zona equivocada, se vuelve solo. Sin esto habría que
+  // adivinar cuál celda es la de salir.
+  if (est.zoom.venció(t)) {
+    est.zoom.alejar();
+    aplicarZoom();
+    est.dwellZoom.reiniciar();
+    return;
+  }
+
+  // --- segundo tiempo: elegir, ya con las celdas grandes ----------------
   const r = est.dwell.paso(
     muestra,
     (x, y) => golpearEn(est.cajas, x, y),
@@ -610,6 +670,9 @@ function pasoTablero(datos, dt, t) {
 
   if (r.disparo) {
     const el = $(`[data-id="${CSS.escape(r.disparo)}"]`);
+    est.zoom.alejar();
+    aplicarZoom();
+    est.dwellZoom.reiniciar();
     if (el) aplicar(el.dataset.accion);
   }
 
