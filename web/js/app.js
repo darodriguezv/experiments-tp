@@ -571,7 +571,12 @@ function pasoPrecision(datos, dt, t) {
 function mostrarResultado() {
   const prueba = est.prueba;
   $("#cursor").hidden = true;
-  $("#res-texto").textContent = informePrecision(prueba);
+  $("#res-texto").textContent = informePrecision(prueba)
+    + `
+
+seguimiento de la calibración: `
+    + `${((est.modelo.recorrido ?? NaN) * 100).toFixed(0)}%`
+    + ` (alpha ${est.modelo.alfaElegido})`;
 
   const tabla = $("#res-tabla");
   const filas = aciertoPorGrilla(prueba);
