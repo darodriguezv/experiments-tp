@@ -22,8 +22,8 @@
  * aparecería como si el estimador fuera malo.
  */
 
-import { extraer, RASGOS_DIM, UMBRAL_PARPADEO } from "./rasgos.js";
-import { ModeloMirada, entrenarConCV } from "./modelo.js";
+import { UMBRAL_PARPADEO } from "./rasgos.js";
+import { crearEstimador, ESTIMADORES, FalloEstimador } from "./estimador.js";
 import { Suavizador, VentanaMediana } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
@@ -32,11 +32,6 @@ import { Zoom, DWELL_ACERCAR_MS } from "./zoom.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
          zoomNecesario, informe as informePrecision }
   from "./precision.js";
-
-const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18";
-const MODELO_CARA =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/" +
-  "face_landmarker/float16/1/face_landmarker.task";
 
 /* Nueve puntos, como el lado nativo. Cinco dejan las esquinas sin cubrir y el
  * error crece hacia los bordes, que es justo donde viven las celdas. */
@@ -52,7 +47,9 @@ const PUNTOS = [
  * en serpentina. Cada píxel de recorrido es tiempo que la mirada pasa EN
  * TRÁNSITO, y las muestras que caen ahí le enseñan al modelo que los rasgos de
  * estar mirando el punto anterior corresponden a las coordenadas del actual. */
-const MUESTRAS_POR_PUNTO = 30;
+/* Cuántas muestras se graban por punto lo decide el ESTIMADOR, no esta
+ * pantalla: el propio aguanta 30 y WebGazer solo guarda las últimas 50 en
+ * total, así que ahí son 5. Ver `webgazer_est.js`. */
 const MS_ASENTAR = 1400;
 const MS_ASENTAR_PRIMERO = 2200;
 /* El primer punto necesita mucho más. Viniendo de la pantalla de colocación la
@@ -95,12 +92,26 @@ const MODOS = {
   },
 };
 
+/* Cuál estimador está puesto. Se recuerda entre recargas porque medir uno
+ * contra el otro obliga a recalibrar, y perder la elección en cada F5 hace que
+ * uno termine midiendo el mismo dos veces sin darse cuenta. */
+const CLAVE_ESTIMADOR = "caa.estimador";
+
+function estimadorElegido() {
+  try {
+    const v = localStorage.getItem(CLAVE_ESTIMADOR);
+    if (ESTIMADORES.some((e) => e.clave === v)) return v;
+  } catch (_) { /* modo privado */ }
+  return "propio";
+}
+
 const est = {
   fase: "menu",
   modo: "libre", cola: [], protocolo: null,
   guion: null, tarea: 0,
-  video: null, landmarker: null,
-  modelo: new ModeloMirada(),
+  mirada: null,                 // el estimador en uso
+  estimador: estimadorElegido(),
+  diag: null,                   // lo que devolvió ajustar()
   suave: new Suavizador(),
   ventana: new VentanaMediana(320),
   dwell: new Permanencia(),
@@ -117,8 +128,7 @@ const est = {
   candidatos: null,
   ultimoT: 0, fps: 0,
   stats: { dwells: 0, t0: null },
-  calib: { i: 0, muestras: [], objetivos: [], buffer: [], fase: "asentar",
-           desde: 0 },
+  calib: { i: 0, n: 0, ultima: 0, fase: "asentar", desde: 0 },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -155,9 +165,11 @@ async function iniciar() {
     ? "Este navegador puede correr el modelo localmente."
     : "Este navegador no tiene WebGPU: las frases van a venir de una corrida grabada.";
 
+  pintarEstimadores();
+
   $("#btn-empezar").addEventListener("click", arrancarCamara);
   $("#btn-reintentar").addEventListener("click", () => {
-    if (est.reintentarCalibracion && est.landmarker) {
+    if (est.reintentarCalibracion && est.mirada) {
       // Ya hay cámara y detector: no hace falta recargar la página entera,
       // solo rehacer la calibración.
       est.reintentarCalibracion = false;
@@ -207,6 +219,36 @@ function pintarMenu() {
     c.querySelector(".detalle").textContent = detalle || "";
     b.appendChild(c);
     b.addEventListener("click", () => elegirModo(clave));
+    return b;
+  }));
+}
+
+/** El selector de estimador.
+ *
+ * Está en el menú y no escondido en una opción de desarrollo porque ahora
+ * mismo es la variable que se está midiendo. Cambiarlo recarga la página: el
+ * estimador se queda con la cámara y con su propio lazo de cuadros, y
+ * desmontarlo en caliente sería otra fuente de fallos sin ningún beneficio.
+ */
+function pintarEstimadores() {
+  const cont = $("#estimadores");
+  if (!cont) return;
+  cont.replaceChildren(...ESTIMADORES.map((e) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "opcion-est" + (e.clave === est.estimador ? " puesto" : "");
+    const t = document.createElement("span");
+    t.className = "titulo";
+    t.textContent = e.nombre;
+    const d = document.createElement("span");
+    d.className = "detalle";
+    d.textContent = e.detalle;
+    b.append(t, d);
+    b.addEventListener("click", () => {
+      if (e.clave === est.estimador) return;
+      try { localStorage.setItem(CLAVE_ESTIMADOR, e.clave); } catch (_) {}
+      location.reload();
+    });
     return b;
   }));
 }
@@ -272,59 +314,42 @@ function fallar(msg, detalle = "") {
 /* --------------------------------------------------------------- cámara */
 
 async function arrancarCamara() {
-  mostrar("permiso");
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 },
-               facingMode: "user" },
-      audio: false,
-    });
-    est.video = $("#video");
-    est.video.srcObject = stream;
-    await est.video.play();
-    // El espejo del ovalo comparte el MISMO stream: dos <video> sobre un
-    // MediaStream es seguro y evita pedir la camara dos veces.
-    const espejo = $("#espejo");
-    if (espejo) { espejo.srcObject = stream; espejo.play().catch(() => {}); }
-
-    // Si el elemento no tiene dimensiones reales, el detector recibe una
-    // imagen inservible y nada de lo que sigue significa algo. Vale la pena
-    // comprobarlo y decirlo, en vez de dejar que falle silenciosamente.
-    await new Promise((r) => {
-      if (est.video.videoWidth) return r();
-      est.video.addEventListener("loadedmetadata", r, { once: true });
-      setTimeout(r, 3000);
-    });
-    est.resolucion = `${est.video.videoWidth}x${est.video.videoHeight}`;
-    console.log("[camara]", est.resolucion);
-    if (est.video.videoWidth < 320) {
-      return fallar("La cámara entrega una imagen demasiado chica.",
-                    `${est.resolucion}. Se necesita al menos 320 px de ancho `
-                    + `para ubicar los puntos del iris.`);
-    }
-  } catch (e) {
-    return fallar(
-      "No se pudo usar la cámara.",
-      "Hace falta permiso de cámara y una conexión segura (https). " +
-      String(e?.message || e));
+  /* En el flujo completo se vuelve a esta pantalla entre condiciones, y ahí la
+   * cámara y el detector ya están andando: hay que recalibrar, no volver a
+   * arrancar todo. Con WebGazer la diferencia deja de ser una optimización y
+   * pasa a ser necesaria, porque un segundo `begin()` monta un segundo video y
+   * un segundo lazo de cuadros sobre la misma cámara. */
+  if (est.mirada) {
+    est.colocadoDesde = 0;
+    return mostrar("colocacion");
   }
-
+  mostrar("permiso");
+  // WebGazer baja unos 8 MB de WebAssembly la primera vez, y eso pasa dentro
+  // de su arranque. Sin avisarlo, la pantalla dice "esperando la camara"
+  // durante medio minuto y parece colgada.
+  const detalle = $("#permiso-detalle");
+  if (detalle && est.estimador === "webgazer") {
+    detalle.textContent = "El navegador solicitará autorización. La primera "
+      + "vez, WebGazer descarga unos 8 MB de modelo: puede demorar medio "
+      + "minuto antes de que aparezca el encuadre.";
+  }
   try {
-    const vision = await import(MP + "/+esm");
-    const archivos = await vision.FilesetResolver.forVisionTasks(MP + "/wasm");
-    est.landmarker = await vision.FaceLandmarker.createFromOptions(archivos, {
-      baseOptions: { modelAssetPath: MODELO_CARA, delegate: "GPU" },
-      // VIDEO y no IMAGE: el modo video mantiene estado entre cuadros y da
-      // puntos mucho más estables, que es de donde sale la mitad del temblor.
-      runningMode: "VIDEO",
-      numFaces: 1,
-      // Los puntos del iris son los que más informan sobre la mirada.
-      outputFaceBlendshapes: false,
-      outputFacialTransformationMatrixes: false,
-    });
+    est.mirada = await crearEstimador(est.estimador);
+    await est.mirada.iniciar();
   } catch (e) {
-    return fallar("No se pudo cargar el detector facial.",
+    if (e instanceof FalloEstimador) return fallar(e.message, e.detalle);
+    return fallar("No se pudo arrancar el estimador de mirada.",
                   String(e?.message || e));
+  }
+  est.resolucion = est.mirada.resolucion;
+  console.log("[estimador]", est.mirada.nombre, est.resolucion);
+
+  // El espejo del óvalo comparte el MISMO stream que usa el detector: dos
+  // <video> sobre un MediaStream es seguro y evita pedir la cámara dos veces.
+  const espejo = $("#espejo");
+  if (espejo && est.mirada.stream) {
+    espejo.srcObject = est.mirada.stream;
+    espejo.play().catch(() => {});
   }
 
   mostrar("colocacion");
@@ -333,42 +358,25 @@ async function arrancarCamara() {
 
 /* ------------------------------------------------------- lazo principal */
 
-let ultimoTs = -1;
-
-function leerCara() {
-  const v = est.video;
-  if (!v || v.readyState < 2) return null;
-  // MediaPipe exige marcas de tiempo estrictamente crecientes; dos cuadros en
-  // el mismo milisegundo lo hacen tirar excepción y cortar el lazo.
-  let ts = Math.round(performance.now());
-  if (ts <= ultimoTs) ts = ultimoTs + 1;
-  ultimoTs = ts;
-  const r = est.landmarker.detectForVideo(v, ts);
-  return r?.faceLandmarks?.[0] ?? null;
-}
-
 function lazo(t) {
   requestAnimationFrame(lazo);
   const dt = est.ultimoT ? (t - est.ultimoT) / 1000 : 1 / 30;
   est.ultimoT = t;
   est.fps = est.fps * 0.9 + (1 / Math.max(dt, 1e-3)) * 0.1;
 
-  let lm = null;
-  try { lm = leerCara(); } catch (_) { /* un cuadro perdido no corta nada */ }
-  const datos = lm ? extraer(lm) : null;
+  let datos = null;
+  try { datos = est.mirada?.leer(t) ?? null; } catch (_) { /* un cuadro perdido */ }
 
   // Diagnostico barato y permanente. Sin esto, "funciona mal" no se puede
-  // distinguir de "el detector no ve nada" ni de "los rasgos estan
-  // congelados", que son tres problemas con tres arreglos distintos.
-  if (lm) {
-    est.nLandmarks = lm.length;
-    if (datos) {
-      const firma = datos.rasgos[0] + datos.rasgos[250] + datos.rasgos[483];
-      if (est.firmaPrevia !== undefined && firma !== est.firmaPrevia) {
-        est.rasgosVivos = (est.rasgosVivos || 0) + 1;
-      }
-      est.firmaPrevia = firma;
+  // distinguir de "el detector no ve nada" ni de "la prediccion esta
+  // congelada", que son tres problemas con tres arreglos distintos.
+  if (datos) {
+    est.nLandmarks = est.mirada.nPuntosCara;
+    const firma = datos.centro[0] + datos.centro[1] + datos.distOjos;
+    if (est.firmaPrevia !== undefined && firma !== est.firmaPrevia) {
+      est.rasgosVivos = (est.rasgosVivos || 0) + 1;
     }
+    est.firmaPrevia = firma;
   }
 
   if (est.fase === "colocacion") return pasoColocacion(datos);
@@ -409,9 +417,17 @@ function pasoColocacion(datos) {
 
 /* -------------------------------------------------------- calibración */
 
-function empezarCalibracion() {
-  est.calib = { i: 0, muestras: [], objetivos: [], grupos: [], buffer: [],
-                fase: "asentar", desde: performance.now() };
+async function empezarCalibracion() {
+  // `limpiarDatos` espera -WebGazer borra su almacenamiento- y mientras tanto
+  // el lazo sigue corriendo en colocación, así que sin este cerrojo se
+  // arrancarían varias calibraciones encimadas.
+  if (est.arrancando) return;
+  est.arrancando = true;
+  est.calib = { i: 0, n: 0, ultima: 0, fase: "asentar",
+                desde: performance.now() };
+  await est.mirada.limpiarDatos();
+  est.calib.desde = performance.now();
+  est.arrancando = false;
   mostrar("calibracion");
   pintarPuntoCalib();
 }
@@ -442,17 +458,23 @@ function pasoCalibracion(datos, t) {
 
   // El parpadeo NO se graba: durante un parpadeo la geometría del ojo es otra
   // y esas muestras corren el modelo hacia una cara que no está mirando.
-  if (datos && datos.ear > UMBRAL_PARPADEO && c.buffer.length < MUESTRAS_POR_PUNTO) {
-    c.buffer.push(datos.rasgos);
+  //
+  // Cuántas muestras entran y cada cuánto lo dice el estimador. WebGazer solo
+  // conserva las últimas 50 en total, así que ahí son cinco por punto y hay
+  // que repartirlas a lo largo del grabado en vez de tomar cinco cuadros
+  // seguidos, que serían la misma muestra cinco veces.
+  const cupo = est.mirada.muestrasPorPunto;
+  const espaciado = est.mirada.msEntreMuestras;
+  if (datos && datos.ear > UMBRAL_PARPADEO && c.n < cupo
+      && t - c.ultima >= espaciado) {
+    const [fx, fy] = PUNTOS[c.i];
+    const objetivo = [fx * window.innerWidth, fy * window.innerHeight];
+    if (est.mirada.grabar(datos, objetivo, c.i)) { c.n += 1; c.ultima = t; }
   }
 
   if (transcurrido > MS_GRABAR) {
-    const [fx, fy] = PUNTOS[c.i];
-    const objetivo = [fx * window.innerWidth, fy * window.innerHeight];
-    for (const r of c.buffer) {
-      c.muestras.push(r); c.objetivos.push(objetivo); c.grupos.push(c.i);
-    }
-    c.buffer = [];
+    c.grabadas = (c.grabadas || 0) + c.n;
+    c.n = 0; c.ultima = 0;
     c.i += 1;
     if (c.i >= PUNTOS.length) return terminarCalibracion();
     c.fase = "asentar"; c.desde = t;
@@ -460,27 +482,15 @@ function pasoCalibracion(datos, t) {
   }
 }
 
-function terminarCalibracion() {
-  const c = est.calib;
-  if (c.muestras.length < PUNTOS.length * 4) {
-    return fallar(
-      "La calibración no juntó suficientes muestras.",
-      `Se grabaron ${c.muestras.length}. Suele ser falta de luz o la cara ` +
-      `fuera de cuadro. Pruebe de nuevo con la cara bien iluminada.`);
-  }
+async function terminarCalibracion() {
+  let diag;
   try {
-    // Alpha lo elige la propia calibración, por validación cruzada dejando
-    // fuera un punto entero. El valor fijo que había antes (5000) colapsaba
-    // el modelo: predecía casi el centro de la pantalla para cualquier
-    // entrada, con 354 px de sesgo y 40 px de temblor.
-    est.modelo = entrenarConCV(c.muestras, c.objetivos, c.grupos);
+    diag = await est.mirada.ajustar();
   } catch (e) {
+    if (e instanceof FalloEstimador) return fallar(e.message, e.detalle);
     return fallar("No se pudo ajustar el modelo.", String(e?.message || e));
   }
-  // Se muestra el error de VALIDACIÓN CRUZADA, no el de entrenamiento: el de
-  // entrenamiento siempre se ve bien -se mide sobre los mismos puntos con los
-  // que se ajustó- y por eso una calibración rota pasaba desapercibida.
-  const cv = est.modelo.errorCV;
+  est.diag = diag;
 
   // Puerta de calidad. Medido: dos calibraciones del mismo código dieron 123 px
   // y 316 px de error, y la segunda era un modelo colapsado que el sistema
@@ -494,12 +504,13 @@ function terminarCalibracion() {
   //
   // El recorrido compara cuánto se mueven las predicciones contra cuánto se
   // mueven los objetivos. Por debajo de 0.45 el modelo responde a la mirada
-  // menos de la mitad de lo que debería, y eso no se arregla con zoom.
-  const rec = est.modelo.recorrido;
-  console.log("[calibración] alpha", est.modelo.alfaElegido,
-              "LOO", Math.round(cv), "recorrido", rec?.toFixed(2));
+  // menos de la mitad de lo que debería, y eso no se arregla con zoom. Es el
+  // mismo número en los dos estimadores, a propósito: ver `recorridoDe`.
+  const rec = diag.recorrido;
+  console.log("[calibración]", est.mirada.nombre, diag.nota,
+              "recorrido", Number(rec).toFixed(2));
   if (Number.isFinite(rec) && rec < 0.45) {
-    return calibracionMala(rec, cv, c);
+    return calibracionMala(rec);
   }
 
   est.suave.reiniciar();
@@ -527,7 +538,8 @@ function avanzarTarea() {
     // Entre condiciones se recalibra. No es una molestia del protocolo: entre
     // bloques la persona se levanta, cambia de postura, y una calibración
     // vieja arrastra un error sistemático que se le atribuiría a la condición.
-    est.modelo = new ModeloMirada();
+    est.mirada.limpiarDatos();
+    est.diag = null;
     prepararSiguiente();
   } else {
     mostrar("menu");
@@ -552,8 +564,8 @@ function pintarPuntoPrueba() {
 
 function pasoPrecision(datos, dt, t) {
   let muestra = { x: 0, y: 0, ok: false };
-  if (datos && datos.ear > UMBRAL_PARPADEO) {
-    const [px, py] = est.modelo.predecir(datos.rasgos);
+  if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO) {
+    const [px, py] = datos.cruda;
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
@@ -581,9 +593,12 @@ function mostrarResultado() {
   $("#res-texto").textContent = informePrecision(prueba)
     + `
 
+estimador: ${est.mirada.etiqueta}`
+    + `
 seguimiento de la calibración: `
-    + `${((est.modelo.recorrido ?? NaN) * 100).toFixed(0)}%`
-    + ` (alpha ${est.modelo.alfaElegido})`;
+    + `${((est.diag?.recorrido ?? NaN) * 100).toFixed(0)}%`
+    + `
+${est.diag?.nota ?? ""}`;
 
   const tabla = $("#res-tabla");
   const filas = aciertoPorGrilla(prueba);
@@ -619,7 +634,10 @@ seguimiento de la calibración: `
     ...filas.map((f) =>
       `${f.grilla}  ${f.celda}  ${Math.round(f.acierto * 100)}%`),
     "",
-    `camara ${est.resolucion}, ${est.nLandmarks} landmarks`,
+    `estimador ${est.mirada.nombre} - ${est.mirada.etiqueta}`,
+    `camara ${est.resolucion}, ${est.nLandmarks} puntos faciales`,
+    `calibracion: ${est.diag?.nota ?? "?"}, `
+      + `recorrido ${((est.diag?.recorrido ?? NaN) * 100).toFixed(0)}%`,
   ].join("\n");
   mostrar("resultado");
 }
@@ -653,14 +671,17 @@ function pintarAvanceZoom(avance) {
  * Deja ver el error de cada punto porque casi siempre hay uno o dos que
  * arruinan el ajuste -un parpadeo largo, mirar fuera de la pantalla- y saber
  * cuál permite repetir prestando atención ahí en vez de repetir a ciegas.
+ *
+ * Ese desglose solo lo sabe dar el estimador propio: reajusta el modelo
+ * dejando cada punto afuera. WebGazer entrena en línea y no expone nada
+ * equivalente, así que ahí el aviso va sin la lista y lo dice.
  */
-function calibracionMala(rec, cv, c) {
-  const porPunto = errorPorPuntoCalib(c);
-  const peores = porPunto
+function calibracionMala(rec) {
+  const peores = (est.mirada.erroresPorPunto?.() ?? [])
     .map((e, i) => [i + 1, e])
+    .filter(([, e]) => Number.isFinite(e))
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .filter(([, e]) => Number.isFinite(e));
+    .slice(0, 3);
 
   $("#error-msg").textContent = "La calibración no salió bien";
   $("#error-detalle").innerHTML =
@@ -680,29 +701,6 @@ function calibracionMala(rec, cv, c) {
   $("#btn-reintentar").textContent = "Repetir la calibración";
   est.reintentarCalibracion = true;
   mostrar("error");
-}
-
-/** Error de cada punto de calibración, dejándolo fuera del ajuste. */
-function errorPorPuntoCalib(c) {
-  const puntos = [...new Set(c.grupos)];
-  return puntos.map((fuera) => {
-    const dentro = [], afuera = [];
-    c.grupos.forEach((g, i) => (g === fuera ? afuera : dentro).push(i));
-    if (dentro.length < 4 || !afuera.length) return NaN;
-    try {
-      const m = new ModeloMirada().entrenar(
-        dentro.map((i) => c.muestras[i]), dentro.map((i) => c.objetivos[i]),
-        est.modelo.alfaElegido);
-      let s = 0;
-      for (const i of afuera) {
-        const [px, py] = m.predecir(c.muestras[i]);
-        s += Math.hypot(px - c.objetivos[i][0], py - c.objetivos[i][1]);
-      }
-      return s / afuera.length;
-    } catch (_) {
-      return NaN;
-    }
-  });
 }
 
 /* ------------------------------------------------- corrección de desvío */
@@ -733,10 +731,10 @@ function pasoDeriva(datos, dt, t) {
   const el = $("#deriva-punto");
 
   let muestra = null;
-  if (datos && datos.ear > UMBRAL_PARPADEO) {
+  if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO) {
     // Se predice SIN la corrección vigente: lo que se quiere medir es el
     // desvío crudo del modelo, no el que queda después de corregir.
-    const [px, py] = est.modelo.predecir(datos.rasgos);
+    const [px, py] = datos.cruda;
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) muestra = med;
@@ -807,8 +805,8 @@ function pasoTablero(datos, dt, t) {
   const cursor = $("#cursor");
   let muestra = { x: 0, y: 0, ok: false };
 
-  if (datos && datos.ear > UMBRAL_PARPADEO) {
-    const [px, py] = est.modelo.predecir(datos.rasgos);
+  if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO) {
+    const [px, py] = datos.cruda;
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
@@ -874,8 +872,9 @@ function pasoTablero(datos, dt, t) {
   $("#dwells").textContent = est.stats.dwells;
   const diag = $("#diag");
   if (diag) {
-    diag.textContent = `${est.nLandmarks || 0} pts · ${est.resolucion || "?"}`
-      + (est.rasgosVivos ? "" : " · RASGOS CONGELADOS");
+    diag.textContent = `${est.mirada?.nombre ?? "?"} · `
+      + `${est.nLandmarks || 0} pts · ${est.resolucion || "?"}`
+      + (est.rasgosVivos ? "" : " · SEÑAL CONGELADA");
   }
 }
 

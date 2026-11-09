@@ -280,6 +280,20 @@ function _recorrido(modelo, muestras, objetivos, grupos) {
     pred.push([px, py]);
     obj.push(objetivos[i]);
   }
+  return recorridoDe(pred, obj);
+}
+
+/** Cuánto se mueven las predicciones contra cuánto se mueven los objetivos.
+ *
+ * Está suelto y exportado porque WebGazer necesita el MISMO número: la puerta
+ * de calidad tiene que medir lo mismo en los dos estimadores, o un umbral de
+ * 0.45 querría decir dos cosas distintas según cuál esté puesto.
+ *
+ * @param {Array<[number,number]>} pred  una predicción por punto de calibración
+ * @param {Array<[number,number]>} obj   el objetivo de cada uno, mismo orden
+ */
+export function recorridoDe(pred, obj) {
+  if (pred.length < 2 || pred.length !== obj.length) return NaN;
   const amplitud = (a, j) =>
     Math.max(...a.map((q) => q[j])) - Math.min(...a.map((q) => q[j]));
   const ox = amplitud(obj, 0), oy = amplitud(obj, 1);

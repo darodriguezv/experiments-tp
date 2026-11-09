@@ -25,6 +25,16 @@
 
     <div class="opciones" id="opciones"></div>
 
+    <!-- El estimador de mirada es, ahora mismo, la variable bajo medición:
+         por eso está acá y no escondido. Cambiarlo recarga la página. -->
+    <div class="bloque-est">
+      <h3 class="sub">Estimador de mirada</h3>
+      <p class="chico tenue">Determina cómo se convierte la imagen de la cámara
+        en un punto de la pantalla. Cambiarlo reinicia la página y obliga a
+        calibrar de nuevo.</p>
+      <div class="estimadores" id="estimadores"></div>
+    </div>
+
     <div class="privacidad">
       <strong>Todo se procesa en este equipo.</strong>
       El video se analiza cuadro a cuadro en el navegador y se descarta: no se
@@ -81,8 +91,8 @@
   <div class="caja estrecha">
     <div class="latido"></div>
     <h2>Esperando la cámara</h2>
-    <p class="tenue">El navegador solicitará autorización. Es necesaria para
-      estimar la dirección de la mirada.</p>
+    <p class="tenue" id="permiso-detalle">El navegador solicitará
+      autorización. Es necesaria para estimar la dirección de la mirada.</p>
   </div>
 </section>
 

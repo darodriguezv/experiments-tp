@@ -311,6 +311,62 @@ button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .opcion-modo .titulo { font-weight: 600; }
 .opcion-modo .detalle { color: var(--tenue); font-size: .86rem; line-height: 1.45; }
 
+/* El selector de estimador. Dos tarjetas lado a lado, con la puesta marcada
+   por un borde vivo y no por un color de relleno: la que está puesta tiene que
+   leerse de un vistazo al volver al menú después de una medición. */
+.bloque-est {
+  border-top: 1px solid var(--borde); padding-top: 18px; margin-top: 4px;
+}
+.estimadores {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;
+}
+@media (max-width: 620px) { .estimadores { grid-template-columns: 1fr } }
+.opcion-est {
+  font: inherit; color: var(--texto); text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--celda-ctrl); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 12px 14px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.opcion-est:hover { background: var(--celda); border-color: var(--borde-vivo); }
+.opcion-est:focus-visible { outline: 2px solid var(--activo); outline-offset: 2px; }
+.opcion-est .titulo { font-weight: 600; font-size: .95rem; }
+.opcion-est .detalle { color: var(--tenue); font-size: .82rem; line-height: 1.45; }
+.opcion-est.puesto {
+  border-color: var(--activo); background: var(--celda);
+  cursor: default;
+}
+.opcion-est.puesto .titulo::after {
+  content: " · en uso"; color: var(--activo); font-weight: 500;
+  font-family: var(--f-dato); font-size: .76rem;
+}
+
+/* WebGazer inyecta su propio video, su malla facial, su recuadro de encuadre y
+   un punto rojo de predicción. La interfaz ya tiene su óvalo y su cursor, así
+   que todo eso sobra.
+
+   Pero NO con `display: none`, que es lo que hace WebGazer cuando
+   `showVideo` es false. Su propio código trata a Safari y a Firefox como
+   excepción y ahí usa `opacity: 0`, justamente porque un <video> sin caja deja
+   de entregar cuadros y `drawImage` saca una imagen vacía. Es el mismo fallo
+   que tuvo este proyecto con `#video { width: 2px }`: el detector recibía una
+   imagen de dos píxeles y la calibración juntaba basura con forma de datos.
+
+   Acá se fuerza lo contrario -queda con sus dimensiones reales- y se lo
+   empuja fuera de la pantalla. `!important` porque WebGazer escribe
+   `style.display` directo en el elemento. */
+#webgazerVideoContainer {
+  display: block !important;
+  position: fixed !important; top: 0 !important; left: 0 !important;
+  opacity: 0 !important; pointer-events: none !important;
+  z-index: -1 !important;
+  transform: translateX(-200vw) !important;
+}
+#webgazerVideoFeed { display: block !important; }
+#webgazerGazeDot, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
+  display: none !important;
+}
+
 .fila { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 button.suave {
   font: inherit; font-weight: 500; cursor: pointer;

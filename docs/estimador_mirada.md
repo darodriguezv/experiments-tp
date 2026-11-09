@@ -139,6 +139,50 @@ mejor que Gaze360 según el benchmark zero-shot de Gaze4HRI. Los datasets detrá
 de esos pesos tienen sus propias condiciones de uso y hay que leerlas antes de
 meterlos en algo que se distribuya.
 
+## Adenda: WebGazer puesto a medir en el mismo banco
+
+Esta investigación concluyó que un estimador más preciso atacaría el término
+equivocado, porque las diez sesiones estaban dominadas por el sesgo y no por el
+temblor. El puerto a navegador no reprodujo ese resultado: el sesgo quedó entre
+123 y 392 px según la sesión, con el mismo código, y cuatro rondas de arreglos
+-alpha por validación cruzada, puerta de colapso, orden en serpentina,
+corrección de deriva- no lo cerraron.
+
+Eso deja dos hipótesis que la medición de Python no puede separar:
+
+1. el estimador propio tiene un defecto que solo aparece en el navegador;
+2. el banco de medición del navegador mide mal, y el estimador está bien.
+
+**WebGazer sirve para separarlas.** Se integró como estimador alternativo
+seleccionable desde el menú, con todo lo demás idéntico: la misma calibración
+de nueve puntos, el mismo filtro de `suavizado.js` -se le apaga el Kalman
+propio-, la misma corrección de deriva y la misma prueba de precisión sobre los
+mismos nueve puntos de control. Si WebGazer anda y el propio no, el problema es
+el estimador. Si los dos fallan igual, el problema es el banco.
+
+No es un reemplazo decidido. Mide otra cosa -los parches de los ojos reducidos
+a 10x6 píxeles, 120 rasgos, contra la geometría de 161 landmarks del propio- y
+su licencia es **GPL-3.0-or-later**, contagiosa para un aparato que se
+distribuya. El encabezado del paquete agrega que empresas valuadas en menos de
+un millón de dólares pueden usarlo bajo LGPLv3. Para medir y para una tesis no
+cambia nada; para distribuir, sí. Esa decisión queda para después de la
+medición, no antes.
+
+### El detalle de integración que casi arruina la comparación
+
+WebGazer guarda el entrenamiento en un buffer circular de **cincuenta**
+posiciones. Las 270 muestras que graba el estimador propio -30 por punto-
+habrían dejado vivas solo las últimas 50: el último punto y medio de los nueve.
+El modelo habría quedado ajustado contra una esquina de la pantalla, y el
+síntoma -sesgo enorme con temblor chico- es exactamente el que se está
+persiguiendo del otro lado. La conclusión habría sido "los dos fallan igual"
+por un motivo que no tiene nada que ver con WebGazer.
+
+Por eso con WebGazer son cinco muestras por punto, 45 de las 50, que es el
+tamaño para el que está hecho: su propio ejemplo de calibración usa nueve
+puntos y cinco clics en cada uno. `web/pruebas/estimador.test.mjs` fija ese
+presupuesto para que no vuelva a subir por simetría con el otro estimador.
+
 ## Límites de esta investigación
 
 - **Una sola persona.** Todas las sesiones son del mismo usuario en el mismo
