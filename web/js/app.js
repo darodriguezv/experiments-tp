@@ -45,8 +45,35 @@ const MUESTRAS_POR_PUNTO = 30;
 const MS_ASENTAR = 900;    // tiempo para que la mirada llegue antes de grabar
 const MS_GRABAR = 1500;
 
+/* Los modos que ofrece el menú.
+ *
+ * `cfg` sale de `protocolo.CONFIG_CONDICION` del lado de Python, exportado a
+ * `datos/estudio.json`. Que venga de ahí y no esté escrito acá es lo que
+ * impide que la web y el estudio midan cosas distintas creyendo que miden lo
+ * mismo.
+ */
+const MODOS = {
+  libre: {
+    nombre: "Tablero libre",
+    detalle: "Usar el tablero sin tareas ni guion. Para probar el equipo.",
+    cfg: { expandir: true, contexto: false, pagina_inicial: "core" },
+    conjunto: null,
+  },
+  letra: { conjunto: 0 },
+  sin_contexto: { conjunto: 1 },
+  con_contexto: { conjunto: 2 },
+  completo: {
+    nombre: "Flujo completo",
+    detalle: "Las tres condiciones seguidas, con calibración entre cada una. "
+           + "Unos 25 minutos.",
+    secuencia: ["letra", "sin_contexto", "con_contexto"],
+  },
+};
+
 const est = {
-  fase: "inicio",
+  fase: "menu",
+  modo: "libre", cola: [], protocolo: null,
+  guion: null, tarea: 0,
   video: null, landmarker: null,
   modelo: new ModeloMirada(),
   suave: new Suavizador(),
@@ -68,16 +95,100 @@ const pantallas = {};
 /* ------------------------------------------------------------- arranque */
 
 async function iniciar() {
-  ["inicio", "permiso", "colocacion", "calibracion", "tablero", "error"]
-    .forEach((n) => { pantallas[n] = $("#p-" + n); });
+  ["menu", "caso", "inicio", "permiso", "colocacion", "calibracion",
+   "tablero", "error"].forEach((n) => { pantallas[n] = $("#p-" + n); });
 
+  est.protocolo = await cargarProtocolo();
   est.slm = new SLM(await cargarGrabados());
+  pintarMenu();
+
+  $("#btn-menu")?.addEventListener("click", () => mostrar("menu"));
+  $("#btn-caso-volver")?.addEventListener("click", () => mostrar("menu"));
+  $("#btn-caso-seguir")?.addEventListener("click", () => mostrar("inicio"));
   $("#webgpu").textContent = est.slm.soportado
     ? "Este navegador puede correr el modelo localmente."
     : "Este navegador no tiene WebGPU: las frases van a venir de una corrida grabada.";
 
   $("#btn-empezar").addEventListener("click", arrancarCamara);
   $("#btn-reintentar").addEventListener("click", () => location.reload());
+  mostrar("menu");
+}
+
+async function cargarProtocolo() {
+  try {
+    const r = await fetch("datos/estudio.json", { cache: "no-store" });
+    return await r.json();
+  } catch (_) {
+    return null;   // sin protocolo queda el tablero libre, que no lo necesita
+  }
+}
+
+function cond(clave) {
+  return est.protocolo?.condiciones?.find((c) => c.clave === clave) ?? null;
+}
+
+function pintarMenu() {
+  const cont = $("#opciones");
+  if (!cont) return;
+  const items = [["libre", MODOS.libre.nombre, MODOS.libre.detalle]];
+  for (const clave of ["letra", "sin_contexto", "con_contexto"]) {
+    const c = cond(clave);
+    if (c) items.push([clave, c.nombre, c.instrucciones]);
+  }
+  items.push(["completo", MODOS.completo.nombre, MODOS.completo.detalle]);
+
+  cont.replaceChildren(...items.map(([clave, nombre, detalle], i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "opcion-modo";
+    b.innerHTML = `<span class="n">${clave === "libre" ? "·"
+      : clave === "completo" ? "∗" : i}</span>`;
+    const c = document.createElement("span");
+    c.className = "cuerpo";
+    c.innerHTML = `<span class="titulo"></span><span class="detalle"></span>`;
+    c.querySelector(".titulo").textContent = nombre;
+    c.querySelector(".detalle").textContent = detalle || "";
+    b.appendChild(c);
+    b.addEventListener("click", () => elegirModo(clave));
+    return b;
+  }));
+}
+
+function elegirModo(clave) {
+  est.modo = clave;
+  est.cola = clave === "completo" ? MODOS.completo.secuencia.slice() : [clave];
+  prepararSiguiente();
+}
+
+/** Deja listo el próximo bloque de la cola y muestra la antesala. */
+function prepararSiguiente() {
+  const clave = est.cola[0] ?? "libre";
+  const c = cond(clave);
+  const cfg = c ? c.cfg : MODOS.libre.cfg;
+  est.cfgActual = cfg;
+  est.pagina = cfg.pagina_inicial || "core";
+
+  const conjunto = MODOS[clave]?.conjunto;
+  est.guion = (conjunto !== null && conjunto !== undefined
+               && est.protocolo?.tareas?.[conjunto])
+    ? est.protocolo.tareas[conjunto] : null;
+  est.tarea = 0;
+
+  $("#inicio-titulo").textContent = c ? c.nombre : MODOS.libre.nombre;
+  $("#inicio-instrucciones").textContent =
+    c ? c.instrucciones : MODOS.libre.detalle;
+  $("#inicio-tareas").textContent = est.guion
+    ? `Se le van a pedir ${est.guion.length} frases, una por vez.`
+    : "Sin tareas: use el tablero libremente.";
+
+  // El guion del caso solo se lee en la condición contextualizada: es la que
+  // necesita que la persona interprete a alguien.
+  if (cfg.contexto && est.protocolo?.caso) {
+    $("#caso-titulo").textContent =
+      `Su papel: ${est.protocolo.caso.nombre}`;
+    $("#caso-guion").textContent = est.protocolo.caso.guion;
+    return mostrar("caso");
+  }
   mostrar("inicio");
 }
 
@@ -314,11 +425,40 @@ function terminarCalibracion() {
   est.suave.reiniciar();
   est.ventana.limpiar();
   est.stats = { dwells: 0, t0: null };
+  // El contexto va al prompt SOLO en la condición contextualizada. Es la
+  // variable independiente de esa comparación: todo lo demás -modelo, prompt,
+  // tablero- queda idéntico entre las dos condiciones con modelo.
+  est.slm.contexto = est.cfgActual?.contexto
+    ? (est.protocolo?.caso?.contexto || "") : "";
   mostrar("tablero");
   redibujar();
 }
 
 /* ------------------------------------------------------------- tablero */
+
+/** Pasa a la tarea siguiente; al agotarse, al bloque siguiente de la cola. */
+function avanzarTarea() {
+  if (!est.guion) return;
+  est.tarea += 1;
+  if (est.tarea < est.guion.length) return;
+
+  est.cola.shift();
+  if (est.cola.length) {
+    // Entre condiciones se recalibra. No es una molestia del protocolo: entre
+    // bloques la persona se levanta, cambia de postura, y una calibración
+    // vieja arrastra un error sistemático que se le atribuiría a la condición.
+    est.modelo = new ModeloMirada();
+    prepararSiguiente();
+  } else {
+    mostrar("menu");
+  }
+}
+
+function bandaTarea() {
+  if (!est.guion || est.tarea >= est.guion.length) return "";
+  const t = est.guion[est.tarea];
+  return `${est.tarea + 1}/${est.guion.length}   ${t.pista}`;
+}
 
 function redibujar() {
   const cont = $("#escena");
@@ -338,6 +478,14 @@ function pintarMensaje() {
   const el = $("#mensaje");
   el.textContent = t || "Mire una celda y sostenga la mirada";
   el.classList.toggle("vacio", !t);
+  // La consigna tiene que estar a la vista todo el tiempo: si hay que
+  // acordarse de memoria, el estudio mide memoria.
+  const banda = $("#consigna");
+  if (banda) {
+    const b = bandaTarea();
+    banda.textContent = b;
+    banda.hidden = !b;
+  }
 }
 
 function pasoTablero(datos, dt, t) {
@@ -410,6 +558,16 @@ async function aplicar(accion) {
     if (est.letras) { est.palabras.push(est.letras); est.letras = ""; }
     const t = texto();
     if (!t) return redibujar();
+    // Condición de línea de base: lo que se escribió es lo que se dice, sin
+    // pantalla de candidatos. Elegir entre opciones es justamente la función
+    // que esta condición existe para NO tener.
+    if (est.cfgActual && est.cfgActual.expandir === false) {
+      hablar(t);
+      est.palabras = []; est.letras = "";
+      avanzarTarea();
+      est.dwell.bloquear(800);
+      return redibujar();
+    }
     est.candidatos = { pensando: true, lista: [], modo: "", ms: 0 };
     redibujar();
     const r = await est.slm.expandir(t);
@@ -420,6 +578,7 @@ async function aplicar(accion) {
   } else if (accion.startsWith("say:")) {
     hablar(accion.slice(4));
     est.palabras = []; est.letras = ""; est.candidatos = null;
+    avanzarTarea();
     est.dwell.bloquear(800);
     return redibujar();
   } else if (accion === "back") {

@@ -14,24 +14,46 @@
      significar nada. Se oculta por opacidad, no por dimensiones. -->
 <video id="video" playsinline muted autoplay></video>
 
-<!-- ------------------------------------------------------------ inicio -->
-<section id="p-inicio" class="pantalla centrada">
+<!-- -------------------------------------------------------------- menú -->
+<section id="p-menu" class="pantalla centrada" hidden>
   <div class="caja">
     <h1>Tablero de comunicación por mirada</h1>
     <p class="guia-texto">
-      Este es el dispositivo completo: detecta hacia dónde mira la persona
-      mediante la cámara y selecciona una celda cuando sostiene la mirada
-      sobre ella. Después, un modelo
-      de lenguaje convierte las palabras sueltas en frases.
+      Seleccione qué desea hacer. Todas las opciones requieren calibrar la
+      mirada al comenzar.
     </p>
 
+    <div class="opciones" id="opciones"></div>
+
     <div class="privacidad">
-      <strong>Todo corre en tu máquina.</strong>
-      El video se procesa cuadro a cuadro en el navegador y se descarta: no se
-      transmite, no se almacena y no sale de este equipo. El texto compuesto
+      <strong>Todo se procesa en este equipo.</strong>
+      El video se analiza cuadro a cuadro en el navegador y se descarta: no se
+      transmite, no se almacena y no sale de esta máquina. El texto compuesto
       tampoco.
       <span id="webgpu" class="chico"></span>
     </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- el caso -->
+<section id="p-caso" class="pantalla centrada" hidden>
+  <div class="caja">
+    <h2 id="caso-titulo">Su papel en esta prueba</h2>
+    <p class="tenue chico">Léalo con calma. Cuando termine, continúe.</p>
+    <div class="guion" id="caso-guion"></div>
+    <div class="fila">
+      <button id="btn-caso-seguir" class="principal">Continuar</button>
+      <button id="btn-caso-volver" class="suave">Volver</button>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ inicio -->
+<section id="p-inicio" class="pantalla centrada">
+  <div class="caja">
+    <h1 id="inicio-titulo">Preparación</h1>
+    <p class="guia-texto" id="inicio-instrucciones"></p>
+    <p class="chico tenue" id="inicio-tareas"></p>
 
     <ol class="pasos">
       <li>Autorizar el uso de la cámara.</li>
@@ -47,7 +69,10 @@
       sistemático que ningún filtro corrige.
     </p>
 
-    <button id="btn-empezar" class="principal">Empezar</button>
+    <div class="fila">
+      <button id="btn-empezar" class="principal">Comenzar</button>
+      <button id="btn-menu" class="suave">Volver al menú</button>
+    </div>
   </div>
 </section>
 
@@ -88,6 +113,7 @@
 <!-- ------------------------------------------------------------ tablero -->
 <section id="p-tablero" class="pantalla aparato" hidden>
   <div class="panel">
+    <div id="consigna" class="consigna" hidden></div>
     <div id="mensaje" class="mensaje vacio">Mire una celda y sostenga la mirada</div>
   </div>
   <div id="escena" class="escena"></div>

@@ -289,3 +289,49 @@ button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
   .guia-marco { width: 180px; height: 225px }
   .medidor { gap: 14px }
 }
+
+/* ---------------------------------------------------------------- menú */
+.opciones { display: flex; flex-direction: column; gap: 6px; margin: 22px 0; }
+.opcion-modo {
+  font: inherit; color: var(--texto); text-align: left; cursor: pointer;
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 14px 16px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.opcion-modo:hover { background: var(--celda-viva); border-color: var(--activo); }
+.opcion-modo:focus-visible { outline: 2px solid var(--activo); outline-offset: 2px; }
+.opcion-modo .n {
+  flex: 0 0 26px; height: 26px; display: grid; place-items: center;
+  background: var(--celda-ctrl); border: 1px solid var(--borde);
+  color: var(--activo); font-family: var(--f-dato); font-size: .82rem;
+  font-weight: 600;
+}
+.opcion-modo .cuerpo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.opcion-modo .titulo { font-weight: 600; }
+.opcion-modo .detalle { color: var(--tenue); font-size: .86rem; line-height: 1.45; }
+
+.fila { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button.suave {
+  font: inherit; font-weight: 500; cursor: pointer;
+  background: transparent; color: var(--tenue);
+  border: 1px solid var(--borde); border-radius: 3px; padding: 13px 20px;
+}
+button.suave:hover { color: var(--texto); border-color: var(--borde-vivo); }
+
+/* El guion del caso: ancho de LECTURA, no ancho de pantalla. Lo lee la
+   persona que va a interpretar el papel, no el investigador. */
+.guion {
+  white-space: pre-wrap; max-width: 56ch;
+  font-size: 1.08rem; line-height: 1.75; color: #c9ced0;
+  border-left: 3px solid var(--activo); padding: 18px 22px;
+  background: #111413; margin: 18px 0 22px;
+}
+
+/* La consigna de la tarea, arriba del mensaje compuesto. */
+.consigna {
+  font-family: var(--f-dato); font-size: .78rem; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--activo);
+  margin-bottom: 4px; text-align: center;
+}
+.panel { flex-direction: column; justify-content: center; }

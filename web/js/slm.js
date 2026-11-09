@@ -32,6 +32,10 @@ const MODELO_WEB = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
 export class SLM {
   constructor(grabados) {
     this.grabados = grabados || {};
+    /** Quién usa el tablero, para el prompt. Vacío salvo en la condición
+     *  contextualizada: la diferencia entre llenarlo y no llenarlo ES la
+     *  variable independiente de esa comparación. */
+    this.contexto = "";
     this.motor = null;
     this.cargando = false;
     this.progreso = 0;
@@ -86,9 +90,17 @@ export class SLM {
     if (this.motor) {
       const t0 = performance.now();
       try {
+        // El contexto va al final del system, nunca al user: el user es la
+        // entrada telegráfica y nada más. Mezclarlos haría que el modelo trate
+        // los datos de la persona como parte de lo que quiso decir, que es el
+        // error que el filtro de invención después castiga.
+        const system = this.contexto
+          ? [PROMPT_SISTEMA, "", "Sobre quien usa el tablero:",
+             this.contexto].join("\n")
+          : PROMPT_SISTEMA;
         const r = await this.motor.chat.completions.create({
           messages: [
-            { role: "system", content: PROMPT_SISTEMA },
+            { role: "system", content: system },
             { role: "user", content: construirUsuario(t) },
           ],
           temperature: 0.9,
