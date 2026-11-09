@@ -23,7 +23,7 @@
  */
 
 import { extraer, RASGOS_DIM, UMBRAL_PARPADEO } from "./rasgos.js";
-import { ModeloMirada } from "./modelo.js";
+import { ModeloMirada, entrenarConCV } from "./modelo.js";
 import { Suavizador, VentanaMediana } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
@@ -383,7 +383,7 @@ function pasoColocacion(datos) {
 /* -------------------------------------------------------- calibración */
 
 function empezarCalibracion() {
-  est.calib = { i: 0, muestras: [], objetivos: [], buffer: [],
+  est.calib = { i: 0, muestras: [], objetivos: [], grupos: [], buffer: [],
                 fase: "asentar", desde: performance.now() };
   mostrar("calibracion");
   pintarPuntoCalib();
@@ -421,7 +421,9 @@ function pasoCalibracion(datos, t) {
   if (transcurrido > MS_GRABAR) {
     const [fx, fy] = PUNTOS[c.i];
     const objetivo = [fx * window.innerWidth, fy * window.innerHeight];
-    for (const r of c.buffer) { c.muestras.push(r); c.objetivos.push(objetivo); }
+    for (const r of c.buffer) {
+      c.muestras.push(r); c.objetivos.push(objetivo); c.grupos.push(c.i);
+    }
     c.buffer = [];
     c.i += 1;
     if (c.i >= PUNTOS.length) return terminarCalibracion();
@@ -439,20 +441,23 @@ function terminarCalibracion() {
       `fuera de cuadro. Pruebe de nuevo con la cara bien iluminada.`);
   }
   try {
-    // Regularizacion fuerte a proposito: medido con muestras
-    // correlacionadas, alpha=1 daba 159 px de error sobre
-    // fijaciones nuevas y alpha alto 118 px. Las muestras de un
-    // mismo punto son cuadros casi iguales, asi que el n efectivo
-    // es 9 para 486 rasgos y memorizar es el modo de fallar.
-    est.modelo.entrenar(c.muestras, c.objetivos, 5000);
+    // Alpha lo elige la propia calibración, por validación cruzada dejando
+    // fuera un punto entero. El valor fijo que había antes (5000) colapsaba
+    // el modelo: predecía casi el centro de la pantalla para cualquier
+    // entrada, con 354 px de sesgo y 40 px de temblor.
+    est.modelo = entrenarConCV(c.muestras, c.objetivos, c.grupos);
   } catch (e) {
     return fallar("No se pudo ajustar el modelo.", String(e?.message || e));
   }
-  const err = est.modelo.errorEntrenamiento(c.muestras, c.objetivos);
-  // Error de ENTRENAMIENTO: se mide sobre los mismos puntos con los que se
-  // ajustó, así que subestima el error real. Sirve para detectar una
-  // calibración rota, no para reportar precisión.
-  $("#ajuste").textContent = `ajuste ${err.toFixed(0)} px`;
+  // Se muestra el error de VALIDACIÓN CRUZADA, no el de entrenamiento: el de
+  // entrenamiento siempre se ve bien -se mide sobre los mismos puntos con los
+  // que se ajustó- y por eso una calibración rota pasaba desapercibida.
+  const cv = est.modelo.errorCV;
+  $("#ajuste").textContent = Number.isFinite(cv)
+    ? `±${cv.toFixed(0)} px (a=${est.modelo.alfaElegido})`
+    : "sin validar";
+  console.log("[calibración] alpha elegido", est.modelo.alfaElegido,
+              "error CV", cv);
 
   est.suave.reiniciar();
   est.ventana.limpiar();

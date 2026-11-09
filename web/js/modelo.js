@@ -166,3 +166,67 @@ function resolver(A, b) {
   }
   return x;
 }
+
+/* Alphas a probar. Cubre seis órdenes de magnitud porque el valor correcto
+ * depende de la relación señal-ruido de ESA calibración, no de la tarea. */
+const ALFAS = [0.1, 1, 10, 50, 200, 1000, 5000, 20000];
+
+/**
+ * Elige alpha con validación cruzada dejando fuera un PUNTO completo, y
+ * devuelve el modelo ya entrenado con todo.
+ *
+ * ## Por qué hacía falta
+ *
+ * El valor fijo anterior (5000) venía de una prueba sintética cuya estructura
+ * de señal no se parecía a la real, y en uso colapsó el modelo: medido sobre
+ * nueve puntos, predecía prácticamente el centro de la pantalla para cualquier
+ * entrada. El sesgo era de 354 px con apenas 40 px de temblor, que es la firma
+ * exacta de una predicción casi constante.
+ *
+ * ## Por qué se deja fuera un punto y no una muestra
+ *
+ * Las 30 muestras de un mismo punto son cuadros consecutivos de un ojo quieto:
+ * casi idénticas. Dejar fuera una sola deja sus 29 gemelas dentro, así que
+ * cualquier alpha parece perfecto y la validación no valida nada. Dejando
+ * fuera el punto entero se mide lo único que importa: cuánto sirve en una
+ * fijación que el modelo no vio.
+ *
+ * @param {Float64Array[]} muestras
+ * @param {Array<[number,number]>} objetivos
+ * @param {number[]} grupos  a qué punto de calibración pertenece cada muestra
+ */
+export function entrenarConCV(muestras, objetivos, grupos) {
+  const puntos = [...new Set(grupos)];
+  let mejor = { alfa: ALFAS[0], error: Infinity };
+
+  if (puntos.length >= 3) {
+    for (const alfa of ALFAS) {
+      let suma = 0, n = 0;
+      for (const fuera of puntos) {
+        const idxDentro = [], idxFuera = [];
+        grupos.forEach((g, i) => (g === fuera ? idxFuera : idxDentro).push(i));
+        if (idxDentro.length < 4 || !idxFuera.length) continue;
+        let m;
+        try {
+          m = new ModeloMirada().entrenar(
+            idxDentro.map((i) => muestras[i]),
+            idxDentro.map((i) => objetivos[i]), alfa);
+        } catch (_) { continue; }
+        for (const i of idxFuera) {
+          const [px, py] = m.predecir(muestras[i]);
+          if (!Number.isFinite(px) || !Number.isFinite(py)) { suma += 1e6; n++; continue; }
+          suma += Math.hypot(px - objetivos[i][0], py - objetivos[i][1]);
+          n += 1;
+        }
+      }
+      if (n && suma / n < mejor.error) mejor = { alfa, error: suma / n };
+    }
+  }
+
+  const modelo = new ModeloMirada().entrenar(muestras, objetivos, mejor.alfa);
+  modelo.alfaElegido = mejor.alfa;
+  // Este es el número honesto: error sobre fijaciones que el modelo NO vio.
+  // El error de entrenamiento siempre se ve bien y no dice nada.
+  modelo.errorCV = mejor.error;
+  return modelo;
+}
