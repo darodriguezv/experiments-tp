@@ -55,11 +55,31 @@ body {
   user-select: none;
 }
 
-/* El video alimenta al detector; no se muestra. Un espejo del propio rostro en
-   pantalla distrae enormemente cuando hay que mirar celdas. */
+/* El video que alimenta al detector facial.
+ *
+ * **Conserva su tamano natural.** La version anterior lo encogia a 2x2 px para
+ * ocultarlo, y MediaPipe lee de este elemento: le estaba llegando una imagen de
+ * dos pixeles. Los landmarks que salian de ahi no significaban nada, la
+ * calibracion juntaba basura y despues el tablero no apuntaba a ningun lado.
+ *
+ * Se oculta con `opacity` y mandandolo fuera de la vista, NUNCA cambiando sus
+ * dimensiones ni con `display:none`, que ademas detiene el renderizado y deja
+ * al detector sin cuadros. */
 #video {
-  position: fixed; width: 2px; height: 2px;
-  opacity: 0; pointer-events: none; top: 0; left: 0;
+  position: fixed; top: 0; left: 0;
+  width: 320px; height: 240px;
+  opacity: 0; pointer-events: none; z-index: -1;
+  transform: translateX(-200vw);
+}
+
+/* El espejo comparte el mismo stream y SI se ve, dentro del ovalo de
+   colocacion. Sin esto la persona no tiene forma de saber donde esta su cara y
+   calibra a ciegas, que es la otra mitad del problema. */
+#espejo {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: 50% / 42%;
+  transform: scaleX(-1);   /* espejo: moverse a la derecha se ve a la derecha */
+  background: #000;
 }
 
 .pantalla { position: fixed; inset: 0; }
@@ -109,11 +129,12 @@ button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
 /* ----------------------------------------------------------- colocación */
 .guia-marco {
-  position: relative; width: 190px; height: 240px; margin: 22px auto 16px;
+  position: relative; width: 230px; height: 290px; margin: 22px auto 16px;
+  overflow: hidden; border-radius: 50% / 42%;
 }
 .guia {
-  position: absolute; inset: 0;
-  border: 2px dashed var(--borde-vivo); border-radius: 50% / 42%;
+  position: absolute; inset: 0; z-index: 2;
+  border: 3px dashed var(--borde-vivo); border-radius: 50% / 42%;
   transition: border-color .18s ease;
 }
 .guia.ok { border-color: var(--activo); border-style: solid; }
@@ -265,6 +286,6 @@ button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
 @media (max-width: 560px) {
   .grilla { gap: 4px }
-  .guia-marco { width: 150px; height: 190px }
+  .guia-marco { width: 180px; height: 225px }
   .medidor { gap: 14px }
 }

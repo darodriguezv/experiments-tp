@@ -41,9 +41,9 @@ const PUNTOS = [
   [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
   [0.1, 0.9], [0.5, 0.9], [0.9, 0.9],
 ];
-const MUESTRAS_POR_PUNTO = 14;
+const MUESTRAS_POR_PUNTO = 30;
 const MS_ASENTAR = 900;    // tiempo para que la mirada llegue antes de grabar
-const MS_GRABAR = 1100;
+const MS_GRABAR = 1500;
 
 const est = {
   fase: "inicio",
@@ -114,6 +114,26 @@ async function arrancarCamara() {
     est.video = $("#video");
     est.video.srcObject = stream;
     await est.video.play();
+    // El espejo del ovalo comparte el MISMO stream: dos <video> sobre un
+    // MediaStream es seguro y evita pedir la camara dos veces.
+    const espejo = $("#espejo");
+    if (espejo) { espejo.srcObject = stream; espejo.play().catch(() => {}); }
+
+    // Si el elemento no tiene dimensiones reales, el detector recibe una
+    // imagen inservible y nada de lo que sigue significa algo. Vale la pena
+    // comprobarlo y decirlo, en vez de dejar que falle silenciosamente.
+    await new Promise((r) => {
+      if (est.video.videoWidth) return r();
+      est.video.addEventListener("loadedmetadata", r, { once: true });
+      setTimeout(r, 3000);
+    });
+    est.resolucion = `${est.video.videoWidth}x${est.video.videoHeight}`;
+    console.log("[camara]", est.resolucion);
+    if (est.video.videoWidth < 320) {
+      return fallar("La cámara entrega una imagen demasiado chica.",
+                    `${est.resolucion}. Se necesita al menos 320 px de ancho `
+                    + `para ubicar los puntos del iris.`);
+    }
   } catch (e) {
     return fallar(
       "No se pudo usar la cámara.",
@@ -168,6 +188,20 @@ function lazo(t) {
   let lm = null;
   try { lm = leerCara(); } catch (_) { /* un cuadro perdido no corta nada */ }
   const datos = lm ? extraer(lm) : null;
+
+  // Diagnostico barato y permanente. Sin esto, "funciona mal" no se puede
+  // distinguir de "el detector no ve nada" ni de "los rasgos estan
+  // congelados", que son tres problemas con tres arreglos distintos.
+  if (lm) {
+    est.nLandmarks = lm.length;
+    if (datos) {
+      const firma = datos.rasgos[0] + datos.rasgos[250] + datos.rasgos[483];
+      if (est.firmaPrevia !== undefined && firma !== est.firmaPrevia) {
+        est.rasgosVivos = (est.rasgosVivos || 0) + 1;
+      }
+      est.firmaPrevia = firma;
+    }
+  }
 
   if (est.fase === "colocacion") return pasoColocacion(datos);
   if (est.fase === "calibracion") return pasoCalibracion(datos, t);
@@ -262,7 +296,12 @@ function terminarCalibracion() {
       `fuera de cuadro. Pruebe de nuevo con la cara bien iluminada.`);
   }
   try {
-    est.modelo.entrenar(c.muestras, c.objetivos);
+    // Regularizacion fuerte a proposito: medido con muestras
+    // correlacionadas, alpha=1 daba 159 px de error sobre
+    // fijaciones nuevas y alpha alto 118 px. Las muestras de un
+    // mismo punto son cuadros casi iguales, asi que el n efectivo
+    // es 9 para 486 rasgos y memorizar es el modo de fallar.
+    est.modelo.entrenar(c.muestras, c.objetivos, 5000);
   } catch (e) {
     return fallar("No se pudo ajustar el modelo.", String(e?.message || e));
   }
@@ -336,6 +375,11 @@ function pasoTablero(datos, dt, t) {
 
   $("#fps").textContent = est.fps.toFixed(0) + " fps";
   $("#dwells").textContent = est.stats.dwells;
+  const diag = $("#diag");
+  if (diag) {
+    diag.textContent = `${est.nLandmarks || 0} pts · ${est.resolucion || "?"}`
+      + (est.rasgosVivos ? "" : " · RASGOS CONGELADOS");
+  }
 }
 
 async function aplicar(accion) {

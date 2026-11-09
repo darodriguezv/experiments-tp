@@ -9,9 +9,9 @@
 </head>
 <body>
 
-<!-- La cámara nunca se muestra en grande ni se sube a ningún lado: se procesa
-     cuadro a cuadro y se descarta. El elemento existe porque MediaPipe lee de
-     él. -->
+<!-- El elemento que MediaPipe lee. Conserva su tamaño natural: encogerlo le
+     entrega una imagen diminuta al detector y los landmarks dejan de
+     significar nada. Se oculta por opacidad, no por dimensiones. -->
 <video id="video" playsinline muted autoplay></video>
 
 <!-- ------------------------------------------------------------ inicio -->
@@ -66,6 +66,7 @@
   <div class="caja estrecha">
     <h2>Acomode su cara</h2>
     <div class="guia-marco">
+      <video id="espejo" playsinline muted autoplay></video>
       <div id="guia" class="guia"></div>
     </div>
     <p id="colocacion-estado" class="estado">Buscando su cara…</p>
@@ -94,6 +95,7 @@
     <span>permanencias <b id="dwells">0</b></span>
     <span><b id="fps">0 fps</b></span>
     <span id="ajuste"></span>
+    <span id="diag" class="dato"></span>
     <span class="tenue">1.2 s por selección</span>
   </div>
   <div id="cursor" class="cursor" hidden></div>

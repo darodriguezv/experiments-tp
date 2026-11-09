@@ -24,7 +24,7 @@
  * escala chica. Igual que el `StandardScaler` del pipeline de Python.
  */
 
-const ALFA = 1.0;   // mismo valor que el Ridge(alpha) del lado de Python
+export const ALFA_POR_DEFECTO = 1.0;
 
 export class ModeloMirada {
   constructor() {
@@ -41,7 +41,7 @@ export class ModeloMirada {
    * @param {Float64Array[]} muestras  vectores de rasgos
    * @param {Array<[number,number]>} objetivos  píxeles de pantalla
    */
-  entrenar(muestras, objetivos) {
+  entrenar(muestras, objetivos, alfa = ALFA_POR_DEFECTO) {
     const n = muestras.length;
     if (n < 4) throw new Error("hacen falta al menos 4 muestras");
     const d = muestras[0].length;
@@ -83,7 +83,7 @@ export class ModeloMirada {
       }
       K.push(fila);
     }
-    for (let i = 0; i < n; i++) K[i][i] += ALFA;
+    for (let i = 0; i < n; i++) K[i][i] += alfa;
 
     // Centrar los objetivos: ridge penaliza los coeficientes pero no debería
     // penalizar el nivel medio. Sin centrar, la predicción se arrastra hacia
