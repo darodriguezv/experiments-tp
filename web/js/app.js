@@ -42,11 +42,18 @@ const MODELO_CARA =
  * error crece hacia los bordes, que es justo donde viven las celdas. */
 const PUNTOS = [
   [0.1, 0.1], [0.5, 0.1], [0.9, 0.1],
-  [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
+  [0.9, 0.5], [0.5, 0.5], [0.1, 0.5],
   [0.1, 0.9], [0.5, 0.9], [0.9, 0.9],
 ];
+/* Serpentina: las filas alternan de dirección, como hace el lado de Python.
+ *
+ * Recorriendo por filas, el salto del final de una fila al principio de la
+ * siguiente cruza la pantalla entera: 6732 px de recorrido total contra 4274
+ * en serpentina. Cada píxel de recorrido es tiempo que la mirada pasa EN
+ * TRÁNSITO, y las muestras que caen ahí le enseñan al modelo que los rasgos de
+ * estar mirando el punto anterior corresponden a las coordenadas del actual. */
 const MUESTRAS_POR_PUNTO = 30;
-const MS_ASENTAR = 900;
+const MS_ASENTAR = 1400;
 const MS_ASENTAR_PRIMERO = 2200;
 /* El primer punto necesita mucho más. Viniendo de la pantalla de colocación la
  * mirada no sabe dónde está el punto, y medido del lado nativo tarda ~1.7 s en
@@ -102,6 +109,8 @@ const est = {
   dwellZoom: new Permanencia({ dwellMs: DWELL_ACERCAR_MS,
                                refractarioMs: 250 }),
   zoom: new Zoom(),
+  correccion: [0, 0],
+  deriva: null,
   slm: null,
   pagina: "core", palabras: [], letras: "",
   cajas: new Map(),
@@ -119,7 +128,7 @@ const pantallas = {};
 
 async function iniciar() {
   ["menu", "caso", "inicio", "permiso", "colocacion", "calibracion",
-   "tablero", "precision", "resultado", "error"]
+   "tablero", "precision", "deriva", "resultado", "error"]
     .forEach((n) => { pantallas[n] = $("#p-" + n); });
 
   est.protocolo = await cargarProtocolo();
@@ -366,6 +375,7 @@ function lazo(t) {
   if (est.fase === "calibracion") return pasoCalibracion(datos, t);
   if (est.fase === "tablero") return pasoTablero(datos, dt, t);
   if (est.fase === "precision") return pasoPrecision(datos, dt, t);
+  if (est.fase === "deriva") return pasoDeriva(datos, dt, t);
 }
 
 /* ---------------------------------------------------------- colocación */
@@ -500,13 +510,8 @@ function terminarCalibracion() {
   // tablero- queda idéntico entre las dos condiciones con modelo.
   est.slm.contexto = est.cfgActual?.contexto
     ? (est.protocolo?.caso?.contexto || "") : "";
-  if (est.modo === "precision") {
-    est.prueba = new PruebaPrecision();
-    pintarPuntoPrueba();
-    return mostrar("precision");
-  }
-  mostrar("tablero");
-  redibujar();
+  est.correccion = [0, 0];
+  iniciarDeriva();
 }
 
 /* ------------------------------------------------------------- tablero */
@@ -552,9 +557,11 @@ function pasoPrecision(datos, dt, t) {
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
-      muestra = { x: med[0], y: med[1], ok: true };
+      const cx = med[0] + est.correccion[0];
+      const cy = med[1] + est.correccion[1];
+      muestra = { x: cx, y: cy, ok: true };
       const c = $("#cursor");
-      c.style.transform = `translate(${med[0]}px, ${med[1]}px)`;
+      c.style.transform = `translate(${cx}px, ${cy}px)`;
       c.hidden = false;
     }
   }
@@ -698,6 +705,75 @@ function errorPorPuntoCalib(c) {
   });
 }
 
+/* ------------------------------------------------- corrección de desvío */
+
+/* Medido en cuatro sesiones: los nueve puntos salían corridos en la MISMA
+ * dirección, +259 y +282 px de promedio. Un desvío uniforme no se arregla
+ * recalibrando -vuelve a aparecer- pero se mide y se resta en dos segundos.
+ *
+ * Es la corrección de deriva que hacen los medidores de mirada de laboratorio
+ * entre ensayos, y por el mismo motivo: la relación entre la geometría del ojo
+ * y la pantalla deriva con la postura, y volver a ajustar el modelo entero es
+ * caro mientras que recentrarlo es casi gratis. */
+const MS_DERIVA_ASENTAR = 1400;
+const MS_DERIVA_MEDIR = 1200;
+
+function iniciarDeriva() {
+  est.deriva = { fase: "asentar", desde: 0, buffer: [] };
+  const el = $("#deriva-punto");
+  el.style.left = "50%";
+  el.style.top = "50%";
+  mostrar("deriva");
+}
+
+function pasoDeriva(datos, dt, t) {
+  const d = est.deriva;
+  if (!d.desde) d.desde = t;
+  const pasado = t - d.desde;
+  const el = $("#deriva-punto");
+
+  let muestra = null;
+  if (datos && datos.ear > UMBRAL_PARPADEO) {
+    // Se predice SIN la corrección vigente: lo que se quiere medir es el
+    // desvío crudo del modelo, no el que queda después de corregir.
+    const [px, py] = est.modelo.predecir(datos.rasgos);
+    const [sx, sy] = est.suave.paso(px, py, dt);
+    const med = est.ventana.empujar(sx, sy, t);
+    if (med) muestra = med;
+  }
+
+  if (d.fase === "asentar") {
+    el.classList.remove("grabando");
+    if (pasado > MS_DERIVA_ASENTAR) { d.fase = "medir"; d.desde = t; }
+    return;
+  }
+
+  el.classList.add("grabando");
+  el.style.setProperty("--avance", Math.min(1, pasado / MS_DERIVA_MEDIR));
+  if (muestra) d.buffer.push(muestra);
+
+  if (pasado > MS_DERIVA_MEDIR) {
+    if (d.buffer.length >= 5) {
+      const xs = d.buffer.map((q) => q[0]).sort((a, b) => a - b);
+      const ys = d.buffer.map((q) => q[1]).sort((a, b) => a - b);
+      const m = (a) => a[a.length >> 1];
+      est.correccion = [innerWidth / 2 - m(xs), innerHeight / 2 - m(ys)];
+      console.log("[deriva] corrección", est.correccion.map(Math.round));
+    }
+    seguirDespuesDeCalibrar();
+  }
+}
+
+function seguirDespuesDeCalibrar() {
+  if (est.modo === "precision") {
+    est.prueba = new PruebaPrecision();
+    pintarPuntoPrueba();
+    return mostrar("precision");
+  }
+  mostrar("tablero");
+  redibujar();
+}
+
 function redibujar() {
   const cont = $("#escena");
   if (est.candidatos) dibujarCandidatos(cont);
@@ -736,8 +812,10 @@ function pasoTablero(datos, dt, t) {
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
-      muestra = { x: med[0], y: med[1], ok: true };
-      cursor.style.transform = `translate(${med[0]}px, ${med[1]}px)`;
+      const cx = med[0] + est.correccion[0];
+      const cy = med[1] + est.correccion[1];
+      muestra = { x: cx, y: cy, ok: true };
+      cursor.style.transform = `translate(${cx}px, ${cy}px)`;
       cursor.hidden = false;
     }
   }
