@@ -335,3 +335,27 @@ button.suave:hover { color: var(--texto); border-color: var(--borde-vivo); }
   margin-bottom: 4px; text-align: center;
 }
 .panel { flex-direction: column; justify-content: center; }
+
+/* ------------------------------------------------------- resultados */
+pre.plano {
+  white-space: pre-wrap; font-family: var(--f-dato); font-size: .84rem;
+  line-height: 1.6; background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 16px; margin: 16px 0; overflow-x: auto;
+  color: var(--texto);
+}
+h3.sub {
+  font-size: .82rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--tenue); margin: 22px 0 8px; font-weight: 600;
+}
+.tabla { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.tabla td, .tabla th {
+  padding: 8px 10px; border-bottom: 1px solid var(--borde); text-align: left;
+}
+.tabla th {
+  color: var(--tenue); font-size: .76rem; text-transform: uppercase;
+  letter-spacing: .05em; font-weight: 600;
+}
+.tabla td.num { text-align: right; font-family: var(--f-dato);
+                font-variant-numeric: tabular-nums; }
+.tabla tr.bien td { color: var(--activo); }
+.tabla tr.mal td.num { color: var(--alerta); }

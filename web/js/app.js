@@ -28,6 +28,8 @@ import { Suavizador, VentanaMediana } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
 import { SLM } from "./slm.js";
+import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
+         informe as informePrecision } from "./precision.js";
 
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18";
 const MODELO_CARA =
@@ -62,6 +64,14 @@ const MODOS = {
   letra: { conjunto: 0 },
   sin_contexto: { conjunto: 1 },
   con_contexto: { conjunto: 2 },
+  precision: {
+    nombre: "Medir la precisión",
+    detalle: "Calibra y después mide el error en píxeles sobre nueve puntos "
+           + "distintos. Dice si el problema es el estimador o el tamaño de "
+           + "las celdas.",
+    cfg: { expandir: false, contexto: false, pagina_inicial: "core" },
+    conjunto: null,
+  },
   completo: {
     nombre: "Flujo completo",
     detalle: "Las tres condiciones seguidas, con calibración entre cada una. "
@@ -96,7 +106,8 @@ const pantallas = {};
 
 async function iniciar() {
   ["menu", "caso", "inicio", "permiso", "colocacion", "calibracion",
-   "tablero", "error"].forEach((n) => { pantallas[n] = $("#p-" + n); });
+   "tablero", "precision", "resultado", "error"]
+    .forEach((n) => { pantallas[n] = $("#p-" + n); });
 
   est.protocolo = await cargarProtocolo();
   est.slm = new SLM(await cargarGrabados());
@@ -105,6 +116,19 @@ async function iniciar() {
   $("#btn-menu")?.addEventListener("click", () => mostrar("menu"));
   $("#btn-caso-volver")?.addEventListener("click", () => mostrar("menu"));
   $("#btn-caso-seguir")?.addEventListener("click", () => mostrar("inicio"));
+  $("#btn-res-menu")?.addEventListener("click", () => mostrar("menu"));
+  $("#btn-res-copiar")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(est.ultimoResultado || "");
+      $("#btn-res-copiar").textContent = "Copiado";
+    } catch (_) {
+      // Algunos navegadores lo rechazan: se selecciona el texto en su lugar.
+      const r = document.createRange();
+      r.selectNodeContents($("#res-texto"));
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+    }
+  });
   $("#webgpu").textContent = est.slm.soportado
     ? "Este navegador puede correr el modelo localmente."
     : "Este navegador no tiene WebGPU: las frases van a venir de una corrida grabada.";
@@ -136,6 +160,7 @@ function pintarMenu() {
     if (c) items.push([clave, c.nombre, c.instrucciones]);
   }
   items.push(["completo", MODOS.completo.nombre, MODOS.completo.detalle]);
+  items.push(["precision", MODOS.precision.nombre, MODOS.precision.detalle]);
 
   cont.replaceChildren(...items.map(([clave, nombre, detalle], i) => {
     const b = document.createElement("button");
@@ -317,6 +342,7 @@ function lazo(t) {
   if (est.fase === "colocacion") return pasoColocacion(datos);
   if (est.fase === "calibracion") return pasoCalibracion(datos, t);
   if (est.fase === "tablero") return pasoTablero(datos, dt, t);
+  if (est.fase === "precision") return pasoPrecision(datos, dt, t);
 }
 
 /* ---------------------------------------------------------- colocación */
@@ -430,6 +456,11 @@ function terminarCalibracion() {
   // tablero- queda idéntico entre las dos condiciones con modelo.
   est.slm.contexto = est.cfgActual?.contexto
     ? (est.protocolo?.caso?.contexto || "") : "";
+  if (est.modo === "precision") {
+    est.prueba = new PruebaPrecision();
+    pintarPuntoPrueba();
+    return mostrar("precision");
+  }
   mostrar("tablero");
   redibujar();
 }
@@ -458,6 +489,67 @@ function bandaTarea() {
   if (!est.guion || est.tarea >= est.guion.length) return "";
   const t = est.guion[est.tarea];
   return `${est.tarea + 1}/${est.guion.length}   ${t.pista}`;
+}
+
+/* ------------------------------------------------------- precisión */
+
+function pintarPuntoPrueba() {
+  const [fx, fy] = PUNTOS_PRUEBA[est.prueba.i] || [0.5, 0.5];
+  const el = $("#prec-punto");
+  el.style.left = (fx * 100) + "%";
+  el.style.top = (fy * 100) + "%";
+  $("#prec-n").textContent = `${est.prueba.i + 1} / ${PUNTOS_PRUEBA.length}`;
+}
+
+function pasoPrecision(datos, dt, t) {
+  let muestra = { x: 0, y: 0, ok: false };
+  if (datos && datos.ear > UMBRAL_PARPADEO) {
+    const [px, py] = est.modelo.predecir(datos.rasgos);
+    const [sx, sy] = est.suave.paso(px, py, dt);
+    const med = est.ventana.empujar(sx, sy, t);
+    if (med) {
+      muestra = { x: med[0], y: med[1], ok: true };
+      const c = $("#cursor");
+      c.style.transform = `translate(${med[0]}px, ${med[1]}px)`;
+      c.hidden = false;
+    }
+  }
+
+  const r = est.prueba.paso(t, muestra);
+  const el = $("#prec-punto");
+  el.classList.toggle("grabando", est.prueba.fase === "medir");
+  el.style.setProperty("--avance", r.avance);
+
+  if (est.prueba.terminada) return mostrarResultado();
+  if (r.cambio) pintarPuntoPrueba();
+}
+
+function mostrarResultado() {
+  const prueba = est.prueba;
+  $("#cursor").hidden = true;
+  $("#res-texto").textContent = informePrecision(prueba);
+
+  const tabla = $("#res-tabla");
+  const filas = aciertoPorGrilla(prueba);
+  tabla.innerHTML = "<tr><th>grilla</th><th>celda</th>"
+                  + "<th class='num'>acierta</th></tr>";
+  for (const f of filas) {
+    const tr = document.createElement("tr");
+    if (f.acierto >= 0.9) tr.className = "bien";
+    else if (f.acierto < 0.7) tr.className = "mal";
+    tr.innerHTML = `<td>${f.grilla}</td><td class="num">${f.celda}</td>`
+                 + `<td class="num">${Math.round(f.acierto * 100)}%</td>`;
+    tabla.appendChild(tr);
+  }
+  est.ultimoResultado = [
+    informePrecision(prueba),
+    "",
+    ...filas.map((f) =>
+      `${f.grilla}  ${f.celda}  ${Math.round(f.acierto * 100)}%`),
+    "",
+    `camara ${est.resolucion}, ${est.nLandmarks} landmarks`,
+  ].join("\n");
+  mostrar("resultado");
 }
 
 function redibujar() {
