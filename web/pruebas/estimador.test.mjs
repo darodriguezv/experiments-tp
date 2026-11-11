@@ -26,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { recorridoDe } from "../js/modelo.js";
 import { FalloEstimador } from "../js/estimador.js";
 import { EstimadorWebGazer } from "../js/webgazer_est.js";
+import { elegirCresta } from "../js/cresta.js";
 
 const fallos = [];
 const ok = (n, c, x = "") =>
@@ -71,10 +72,26 @@ ok("el cupo se alcanza dentro de la ventana de grabado",
  *
  * @param {(eyes:number)=>[number,number]} mapa  qué predice para cada muestra
  */
-function regresorFalso(mapa, ventana = VENTANA_WG) {
+/** Rasgos de ojo de mentira: 120 valores en 0..255 que dependen de hacia
+ *  dónde se está mirando, que es lo que hace falta para que la validación
+ *  cruzada tenga algo real que validar. */
+function rasgosDe([ox, oy], i) {
+  const v = new Array(120);
+  for (let k = 0; k < 120; k++) {
+    v[k] = Math.max(0, Math.min(255, 128
+      + 50 * Math.sin(k * 0.05) * (ox / W - 0.5)
+      + 50 * Math.cos(k * 0.08) * (oy / H - 0.5)
+      + 6 * Math.sin(k * 1.7 + i)));
+  }
+  return v;
+}
+
+function regresorFalso(mapa, ventana = VENTANA_WG, { conRasgos = true } = {}) {
   return {
     ridgeParameter: 1e-5,
-    eyeFeaturesClicks: { length: 0 },
+    eyeFeaturesClicks: { data: [], length: 0 },
+    screenXClicksArray: { data: [] },
+    screenYClicksArray: { data: [] },
     dataClicks: { data: [] },
     predict(eyes) {
       const [x, y] = mapa(eyes);
@@ -82,14 +99,18 @@ function regresorFalso(mapa, ventana = VENTANA_WG) {
     },
     _tomar(objetivo) {
       if (this.dataClicks.data.length >= ventana) return false;   // se satura
-      this.dataClicks.data.push({ eyes: this.dataClicks.data.length,
-                                  screenPos: objetivo, type: "click" });
+      const i = this.dataClicks.data.length;
+      this.dataClicks.data.push({ eyes: i, screenPos: objetivo, type: "click" });
+      if (conRasgos) {
+        this.eyeFeaturesClicks.data.push(rasgosDe(objetivo, i));
+        this.screenXClicksArray.data.push([objetivo[0]]);
+        this.screenYClicksArray.data.push([objetivo[1]]);
+      }
       this.eyeFeaturesClicks.length = this.dataClicks.data.length;
       return true;
     },
   };
 }
-
 function conRegresor(reg, { sinRasgos = false } = {}) {
   const e = new EstimadorWebGazer();
   e.wg = {
@@ -145,8 +166,42 @@ const dSano = await sano.ajustar();
 console.log(`  recorrido sano:      ${dSano.recorrido.toFixed(2)}`);
 ok("un estimador sano recorre casi todo", dSano.recorrido > 0.8,
    dSano.recorrido?.toFixed(2));
-ok("el diagnóstico dice que no hay validación cruzada",
-   Number.isNaN(dSano.errorCV) && /en línea/.test(dSano.nota), dSano.nota);
+/* Lo que esta prueba tiene que fijar NO es si la validación cruzada elige
+ * bien -eso lo mide `cresta.test.mjs`- sino si el estimador APLICA lo que
+ * eligió. Por eso se compara contra el valor exacto que devuelve `elegirCresta`
+ * con las mismas entradas, y no contra "distinto del de fábrica": con rasgos
+ * fáciles la elección puede dar casi el de fábrica por motivos legítimos, y
+ * esa afirmación pasaría o fallaría por casualidad.
+ *
+ * El fallo que esto atrapa es el de verdad caro: que la cresta se calcule, se
+ * informe en el diagnóstico, y nunca llegue al regresor que predice. */
+const reg2 = sano.wg.getRegression()[0];
+const esperada = elegirCresta(
+  reg2.eyeFeaturesClicks.data,
+  reg2.screenXClicksArray.data.map((v) => v[0]),
+  reg2.screenYClicksArray.data.map((v) => v[0]),
+  sano._grupos);
+console.log(`  cresta elegida:      ${reg2.ridgeParameter.toPrecision(3)}`
+          + `  (de fábrica 0.00001)`);
+ok("el regresor queda con la cresta que eligió la validación",
+   reg2.ridgeParameter === esperada.cresta,
+   `${reg2.ridgeParameter} vs ${esperada.cresta}`);
+ok("y esa cresta es la que el diagnóstico informa",
+   dSano.alfa === esperada.cresta && dSano.errorCV === esperada.error,
+   `${dSano.alfa} / ${dSano.errorCV}`);
+ok("y el diagnóstico informa el error validado, en píxeles",
+   Number.isFinite(dSano.errorCV) && /dejando un punto afuera/.test(dSano.nota),
+   dSano.nota);
+
+/* Si los rasgos no estuvieran guardados, validar contra etiquetas que no les
+ * corresponden sería peor que no validar. Tiene que replegarse y decirlo. */
+const ciego = conRegresor(regresorFalso(() => [700, 300], VENTANA_WG,
+                                        { conRasgos: false }));
+calibrar(ciego);
+const dCiego = await ciego.ajustar();
+ok("sin rasgos guardados no valida y deja la de fábrica",
+   ciego.wg.getRegression()[0].ridgeParameter === 1e-5
+   && /de fábrica/.test(dCiego.nota), dCiego.nota);
 
 // Colapsado: predice casi el centro mire donde mire. Es el fallo que se está
 // persiguiendo, y la puerta tiene que atraparlo también acá.

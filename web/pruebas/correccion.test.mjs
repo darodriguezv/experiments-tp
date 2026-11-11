@@ -15,7 +15,8 @@
  *    en la ganancia, en vez de amplificar el temblor.
  */
 import { ajusteEje, Correccion } from "../js/correccion.js";
-import { PruebaPrecision, ajusteAfin, informe } from "../js/precision.js";
+import { PruebaPrecision, ajusteAfin, informe, curvatura }
+  from "../js/precision.js";
 
 const fallos = [];
 const ok = (n, c, x = "") =>
@@ -124,6 +125,50 @@ ok("sin variación en el objetivo no inventa pendiente",
    ajusteEje([500, 500, 500], [700, 710, 690]).a === 1);
 ok("y ahí devuelve el corrimiento medio",
    Math.abs(ajusteEje([500, 500, 500], [700, 710, 690]).b - 200) < 1e-9);
+
+
+/* -------------------------- la segunda medición: con la corrección puesta
+ *
+ * Misma sesión de WebGazer, pero ya con la corrección de ganancia aplicada.
+ * El sesgo bajó de 210 px a 89, y sin embargo la ganancia que queda sigue sin
+ * ser 1.00. El motivo no es que falten parámetros: es que el desvío se DOBLA.
+ *
+ * Por columna el desvío horizontal da -61, +36, +54 px. El salto de izquierda
+ * a centro es +97 y el de centro a derecha +18: ninguna recta pasa por los
+ * tres. Por eso la recta de la corrección -ajustada sobre 0.2/0.5/0.8- y la
+ * que mide la prueba -sobre 0.25/0.5/0.75- coinciden en el centro y se separan
+ * en los bordes: es como se separan dos cuerdas de una misma curva.
+ *
+ * Una afín 2D completa, con seis parámetros en vez de cuatro, baja el residuo
+ * medio de 44 px a 33 y deja el máximo igual. Más parámetros no es la palanca;
+ * esta prueba está para que no se vuelva a intentar por ahí. */
+
+const MEDIDO2 = [
+  [384, 147, 6, 24], [768, 147, 68, 14], [1152, 147, 63, 5],
+  [384, 368, -90, -55], [768, 368, 21, -63], [1152, 368, 79, -92],
+  [384, 588, -98, -81], [768, 588, 20, -73], [1152, 588, 19, -148],
+];
+
+const corregida = pruebaCon(MEDIDO2, 24);
+const cv = curvatura(corregida);
+console.log("  curvatura: x " + cv.x.toFixed(0) + " px   y " + cv.y.toFixed(0) + " px");
+
+ok("la corrección bajó el sesgo a menos de la mitad",
+   corregida.resumen().sesgo < real.resumen().sesgo / 2,
+   corregida.resumen().sesgo.toFixed(0) + " vs " + real.resumen().sesgo.toFixed(0));
+
+ok("el desvío horizontal se dobla, no es una recta", cv.x > 20, cv.x.toFixed(0));
+ok("y el informe avisa que lo lineal tiene un piso",
+   /una curva/.test(informe(corregida)));
+
+/* Un desvío que SÍ es una recta no puede dar curvatura: si no, el aviso
+ * aparecería siempre y dejaría de significar algo. */
+const recto = pruebaCon(MEDIDO2.map(([tx, ty]) =>
+  [tx, ty, 0.3 * tx - 230, -0.2 * ty + 74]));
+const cvRecto = curvatura(recto);
+ok("un desvío perfectamente lineal da curvatura cero",
+   cvRecto.x < 1e-6 && cvRecto.y < 1e-6, cvRecto.x + ", " + cvRecto.y);
+ok("y ahí el informe NO habla de curva", !/una curva/.test(informe(recto)));
 
 console.log(fallos.length ? `\n${fallos.length} FALLAS` : "\nTodo OK");
 process.exit(fallos.length ? 1 : 0);

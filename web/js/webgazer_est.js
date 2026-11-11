@@ -77,6 +77,7 @@
 
 import { FalloEstimador } from "./estimador.js";
 import { recorridoDe } from "./modelo.js";
+import { elegirCresta } from "./cresta.js";
 
 const WG = "https://cdn.jsdelivr.net/npm/webgazer@3.5.3";
 
@@ -243,6 +244,30 @@ export class EstimadorWebGazer {
         + `la cara fuera de cuadro.`);
     }
 
+    /* Elegir la cresta ANTES de medir el recorrido: si se midiera primero, el
+     * diagnóstico describiría un modelo que ya no es el que se va a usar.
+     *
+     * `_grupos` tiene que venir alineado con los rasgos guardados. Lo está
+     * mientras no se desborde la ventana de 50, que es justo lo que la prueba
+     * `estimador.test.mjs` fija. Si por lo que fuera no coincidieran, se
+     * prefiere no validar antes que validar contra etiquetas corridas.
+     */
+    const X = reg.eyeFeaturesClicks?.data ?? [];
+    const deFabrica = reg.ridgeParameter;
+    let cv = null;
+    if (X.length === this._grupos.length) {
+      await new Promise((r) => setTimeout(r, 0));   // que pinte el cuadro
+      cv = elegirCresta(X,
+        reg.screenXClicksArray.data.map((v) => v[0]),
+        reg.screenYClicksArray.data.map((v) => v[0]),
+        this._grupos);
+    }
+    if (cv) {
+      reg.ridgeParameter = cv.cresta;
+      console.log("[cresta]", cv.tabla.map((f) =>
+        `${f.relativo}: ${f.error.toFixed(0)} px`).join("  "));
+    }
+
     // Primera muestra de cada punto. `_grupos` lleva el mismo orden que
     // `dataClicks` porque solo se empuja cuando el contador del regresor
     // confirmó la grabación.
@@ -261,10 +286,14 @@ export class EstimadorWebGazer {
     const recorrido = recorridoDe(pred, obj);
     return {
       recorrido,
-      errorCV: NaN,
+      errorCV: cv ? cv.error : NaN,
       alfa: reg.ridgeParameter,
-      nota: `${guardadas.length} muestras, cresta ${reg.ridgeParameter}`
-          + " (WebGazer entrena en línea; no hay validación cruzada)",
+      nota: cv
+        ? `${guardadas.length} muestras, cresta ${cv.cresta.toPrecision(3)} `
+          + `elegida dejando un punto afuera (error ${cv.error.toFixed(0)} px; `
+          + `sin regularizar, como viene de fábrica, ${cv.mejoraSobre.toFixed(0)} px)`
+        : `${guardadas.length} muestras, cresta ${deFabrica} de fábrica `
+          + `(no se pudo validar)`,
     };
   }
 

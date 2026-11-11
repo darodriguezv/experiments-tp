@@ -216,6 +216,38 @@ export function ajusteAfin(prueba) {
   return { ex, ey, residuo: s / v.length };
 }
 
+/** Cuánto se aparta el desvío de una RECTA, por eje, en píxeles.
+ *
+ * Es el número que decide si vale la pena corregir más o si hay que arreglar
+ * el modelo. Medido sobre WebGazer ya corregido, el desvío horizontal por
+ * columna daba -61, +36, +54 px: el salto de izquierda a centro es +97 y el
+ * de centro a derecha +18. Eso no es una recta con ruido, es una curva, y una
+ * corrección lineal tiene un piso ahí por más puntos que se midan.
+ *
+ * Se mide sobre los PROMEDIOS por columna y por fila, no por punto: el ruido
+ * de un punto suelto se promedia y lo que queda es la forma.
+ */
+export function curvatura(prueba) {
+  const v = prueba.porPunto.filter((p) => p.n > 0);
+  const eje = (clave, desvio) => {
+    const grupos = new Map();
+    for (const p of v) {
+      const k = Math.round(p[clave]);
+      if (!grupos.has(k)) grupos.set(k, []);
+      grupos.get(k).push(p[clave] + p[desvio]);
+    }
+    if (grupos.size < 3) return 0;   // con dos grupos la recta pasa exacta
+    const t = [...grupos.keys()];
+    const p = t.map((k) => {
+      const g = grupos.get(k);
+      return g.reduce((a, b) => a + b, 0) / g.length;
+    });
+    const e = ajusteEje(t, p);
+    return Math.max(...t.map((tk, i) => Math.abs(e.a * tk + e.b - p[i])));
+  };
+  return { x: eje("tx", "dx"), y: eje("ty", "dy") };
+}
+
 /** Lectura en texto, para copiar y pegar en un reporte. */
 export function informe(prueba) {
   const r = prueba.resumen();
@@ -271,6 +303,9 @@ export function informe(prueba) {
          + `   (1.00 sería correcta)`);
     L.push(`sesgo si se corrigiera la ganancia: ${af.residuo.toFixed(0)} px`
          + `   (ahora ${r.sesgo.toFixed(0)} px)`);
+    const cv = curvatura(prueba);
+    L.push(`curvatura      x ${cv.x.toFixed(0)} px   y ${cv.y.toFixed(0)} px`
+         + `   (cuánto se aparta de una recta)`);
     const torcida = Math.abs(af.ex.a - 1) > 0.15 || Math.abs(af.ey.a - 1) > 0.15;
     L.push(torcida
       ? "La GANANCIA está mal: el desvío crece con la coordenada. Restar una "
@@ -280,6 +315,14 @@ export function informe(prueba) {
           + "constante lo arregla."
         : "Ni corrimiento parejo ni ganancia torcida: el error cambia según "
           + "la zona, sin una regla simple.");
+    /* Si el desvío se dobla, agregarle parámetros a la corrección lineal
+     * no lo arregla: lo que hay que cambiar es el modelo que lo produce. */
+    const piso = Math.hypot(cv.x, cv.y);
+    if (piso > 25) {
+      L.push(`El desvío NO es una recta sino una curva: una corrección `
+           + `lineal tiene un piso de unos ${piso.toFixed(0)} px por más `
+           + `puntos que se midan.`);
+    }
   }
   return L.join("\n");
 }

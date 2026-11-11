@@ -183,6 +183,76 @@ tamaño para el que está hecho: su propio ejemplo de calibración usa nueve
 puntos y cinco clics en cada uno. `web/pruebas/estimador.test.mjs` fija ese
 presupuesto para que no vuelva a subir por simetría con el otro estimador.
 
+### Lo que midieron las dos sesiones de WebGazer
+
+Dos mediciones seguidas, mismo banco, misma persona, nueve puntos de control
+distintos de los nueve de calibración.
+
+| | sin corregir | con corrección de ganancia |
+|---|---|---|
+| error medio | 206 px (5.2°) | **90 px (2.3°)** |
+| sesgo | 210 px | 89 px |
+| temblor | 26 px | 24 px |
+| acierto 3×3 | 45% | 80% |
+| acierto 3×2 | 66% | 99% |
+
+La corrección por eje —ganancia y corrimiento ajustados sobre cinco puntos en
+0.2/0.5/0.8— explica casi todo el salto. El temblor no se movió, que es lo
+esperable: una transformación afín no agrega ruido.
+
+### Lo que la segunda medición reveló: la cresta de fábrica
+
+Después de corregir, el informe **seguía** diciendo que la ganancia estaba mal
+(x 1.15, y 0.74). Y apareció algo que en la primera medición no estaba:
+
+```
+curvatura del desvío horizontal   sesión 1:  1 px      sesión 2:  27 px
+```
+
+Dividir por una constante no puede doblar una recta. Si la sesión 1 daba una
+recta y la 2 una curva, lo que cambió fue el modelo crudo, no la corrección.
+
+La causa está en el código de WebGazer, no en la integración. `RidgeReg.predict`
+resuelve `(XᵀX + kI)⁻¹Xᵀy` en cada llamada, sin intercepto y sin centrar, con
+`k = 0.00001` fijo. Los números:
+
+- **120 rasgos**: dos parches de ojo de 10×6, en escala de grises ecualizada,
+  valores en 0–255;
+- **45 muestras**: el máximo que entra en su ventana circular de 50;
+- diagonal de `XᵀX` del orden de 45 × 128² ≈ 7×10⁵.
+
+Con 45 muestras y 120 rasgos la matriz tiene rango 45 como mucho: es singular.
+Y `k = 0.00001` está once órdenes de magnitud por debajo de su diagonal, así que
+no la arregla. Lo único que la vuelve invertible es el redondeo de punto
+flotante, y la solución queda dominada por direcciones que los datos no
+determinan. De ahí las dos consecuencias medidas:
+
+1. el modelo pasa **exacto** por los nueve puntos de calibración, que es por qué
+   el recorrido da 100% —ese indicador detecta colapso, no sobreajuste, y acá
+   aprobó un modelo que memorizaba;
+2. entre los puntos hace lo que le dicta el espacio nulo, y eso **cambia de
+   forma entre una calibración y la siguiente**.
+
+### Por qué se elige la cresta por validación cruzada
+
+El estimador propio ya elegía su alfa dejando un punto afuera. WebGazer usaba el
+valor de fábrica. Comparar un modelo con el hiperparámetro ajustado contra otro
+sin ajustar no mide los dos estimadores: mide que uno está ajustado y el otro
+no. Emparejar eso es una condición para que la comparación signifique algo.
+
+No le cuesta un punto más al usuario: se valida sobre las 45 muestras que la
+calibración ya grabó, en unos 100 ms.
+
+Tiene que dejarse afuera un **punto entero**, no una muestra. Las cinco muestras
+de un punto se tomaron con la mirada quieta en el mismo lugar y la cabeza en la
+misma pose: dejando una afuera, sus cuatro gemelas la delatan. Simulado con la
+estructura medida, esa variante informa 88 px donde la honesta informa 141.
+
+Sobre datos sintéticos construidos para que el error sin regularizar coincida
+con el medido (186 px simulados contra 206 px reales), la curva de validación
+tiene un mínimo claro y la mejora es del orden del 25%. Es una mejora real, no
+una transformación: queda pendiente medirla en la máquina.
+
 ## Límites de esta investigación
 
 - **Una sola persona.** Todas las sesiones son del mismo usuario en el mismo
