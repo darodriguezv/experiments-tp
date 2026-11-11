@@ -29,6 +29,7 @@ import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
 import { SLM } from "./slm.js";
 import { Zoom, DWELL_ACERCAR_MS } from "./zoom.js";
+import { Correccion } from "./correccion.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
          zoomNecesario, informe as informePrecision }
   from "./precision.js";
@@ -120,7 +121,7 @@ const est = {
   dwellZoom: new Permanencia({ dwellMs: DWELL_ACERCAR_MS,
                                refractarioMs: 250 }),
   zoom: new Zoom(),
-  correccion: [0, 0],
+  correccion: new Correccion(),   // identidad hasta que se ajuste
   deriva: null,
   slm: null,
   pagina: "core", palabras: [], letras: "",
@@ -521,7 +522,7 @@ async function terminarCalibracion() {
   // tablero- queda idéntico entre las dos condiciones con modelo.
   est.slm.contexto = est.cfgActual?.contexto
     ? (est.protocolo?.caso?.contexto || "") : "";
-  est.correccion = [0, 0];
+  est.correccion = new Correccion();
   iniciarDeriva();
 }
 
@@ -569,8 +570,7 @@ function pasoPrecision(datos, dt, t) {
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
-      const cx = med[0] + est.correccion[0];
-      const cy = med[1] + est.correccion[1];
+      const [cx, cy] = est.correccion.aplicar(med);
       muestra = { x: cx, y: cy, ok: true };
       const c = $("#cursor");
       c.style.transform = `translate(${cx}px, ${cy}px)`;
@@ -598,7 +598,9 @@ estimador: ${est.mirada.etiqueta}`
 seguimiento de la calibración: `
     + `${((est.diag?.recorrido ?? NaN) * 100).toFixed(0)}%`
     + `
-${est.diag?.nota ?? ""}`;
+${est.diag?.nota ?? ""}`
+    + `
+corrección: ${est.correccion.listo ? est.correccion.resumen : "ninguna"}`;
 
   const tabla = $("#res-tabla");
   const filas = aciertoPorGrilla(prueba);
@@ -638,6 +640,7 @@ ${est.diag?.nota ?? ""}`;
     `camara ${est.resolucion}, ${est.nLandmarks} puntos faciales`,
     `calibracion: ${est.diag?.nota ?? "?"}, `
       + `recorrido ${((est.diag?.recorrido ?? NaN) * 100).toFixed(0)}%`,
+    `correccion: ${est.correccion.listo ? est.correccion.resumen : "ninguna"}`,
   ].join("\n");
   mostrar("resultado");
 }
@@ -703,25 +706,50 @@ function calibracionMala(rec) {
   mostrar("error");
 }
 
-/* ------------------------------------------------- corrección de desvío */
+/* ------------------------------------------- corrección de la ganancia */
 
-/* Medido en cuatro sesiones: los nueve puntos salían corridos en la MISMA
- * dirección, +259 y +282 px de promedio. Un desvío uniforme no se arregla
- * recalibrando -vuelve a aparecer- pero se mide y se resta en dos segundos.
+/* Después de calibrar, cinco puntos más, y con ellos se ajusta una recta por
+ * eje: `predicción = ganancia * objetivo + corrimiento`.
  *
- * Es la corrección de deriva que hacen los medidores de mirada de laboratorio
- * entre ensayos, y por el mismo motivo: la relación entre la geometría del ojo
- * y la pantalla deriva con la postura, y volver a ajustar el modelo entero es
- * caro mientras que recentrarlo es casi gratis. */
-const MS_DERIVA_ASENTAR = 1400;
-const MS_DERIVA_MEDIR = 1200;
+ * La versión anterior medía un solo punto en el centro y restaba una
+ * constante. Medido con WebGazer sobre nueve puntos, el desvío horizontal iba
+ * de +18 px en la columna izquierda a +309 px en la derecha: no hay ninguna
+ * constante correcta en los dos extremos a la vez. Con la recta, ese sesgo
+ * medido cae de 210 px a 45 px.
+ *
+ * Con un solo punto la recta se degrada sola al corrimiento puro, así que
+ * esto generaliza la corrección anterior en vez de reemplazarla. Ver
+ * `correccion.js`.
+ *
+ * Son cinco y no nueve porque la recta tiene dos parámetros por eje: cinco
+ * puntos ya la determinan de sobra, y cada punto cuesta dos segundos de la
+ * persona. Están en 0.2/0.5/0.8, distintos de los de calibración (0.1/0.5/0.9)
+ * y de los de la prueba (0.25/0.5/0.75): sobre los de calibración el modelo
+ * acierta y no se vería nada, y sobre los de la prueba la prueba dejaría de
+ * medir generalización. */
+const PUNTOS_DERIVA = [
+  [0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8],
+];
+const MS_DERIVA_ASENTAR = 1100;
+/* El primero viene de la última esquina de la calibración y está en el centro,
+ * así que es el salto más largo de toda la secuencia. */
+const MS_DERIVA_PRIMERO = 1700;
+const MS_DERIVA_MEDIR = 1000;
 
 function iniciarDeriva() {
-  est.deriva = { fase: "asentar", desde: 0, buffer: [] };
-  const el = $("#deriva-punto");
-  el.style.left = "50%";
-  el.style.top = "50%";
+  est.deriva = { i: 0, fase: "asentar", desde: 0, buffer: [],
+                 objetivos: [], crudas: [] };
+  pintarPuntoDeriva();
   mostrar("deriva");
+}
+
+function pintarPuntoDeriva() {
+  const [fx, fy] = PUNTOS_DERIVA[est.deriva.i];
+  const el = $("#deriva-punto");
+  el.style.left = (fx * 100) + "%";
+  el.style.top = (fy * 100) + "%";
+  const n = $("#deriva-n");
+  if (n) n.textContent = `${est.deriva.i + 1} / ${PUNTOS_DERIVA.length}`;
 }
 
 function pasoDeriva(datos, dt, t) {
@@ -742,7 +770,9 @@ function pasoDeriva(datos, dt, t) {
 
   if (d.fase === "asentar") {
     el.classList.remove("grabando");
-    if (pasado > MS_DERIVA_ASENTAR) { d.fase = "medir"; d.desde = t; }
+    el.style.setProperty("--avance", "0");
+    const espera = d.i === 0 ? MS_DERIVA_PRIMERO : MS_DERIVA_ASENTAR;
+    if (pasado > espera) { d.fase = "medir"; d.desde = t; }
     return;
   }
 
@@ -751,16 +781,40 @@ function pasoDeriva(datos, dt, t) {
   if (muestra) d.buffer.push(muestra);
 
   if (pasado > MS_DERIVA_MEDIR) {
-    if (d.buffer.length >= 5) {
-      const xs = d.buffer.map((q) => q[0]).sort((a, b) => a - b);
-      const ys = d.buffer.map((q) => q[1]).sort((a, b) => a - b);
-      const m = (a) => a[a.length >> 1];
-      est.correccion = [innerWidth / 2 - m(xs), innerHeight / 2 - m(ys)];
-      console.log("[deriva] corrección", est.correccion.map(Math.round));
+    // Mediana y no media: si la mirada todavía viaja hacia el punto cuando
+    // empieza el registro, la media arrastra el centro hacia el punto
+    // anterior. Eso es una sacada, no un desvío del estimador.
+    if (d.buffer.length >= 4) {
+      const m = (a) => [...a].sort((x, y) => x - y)[a.length >> 1];
+      const [fx, fy] = PUNTOS_DERIVA[d.i];
+      d.objetivos.push([fx * innerWidth, fy * innerHeight]);
+      d.crudas.push([m(d.buffer.map((q) => q[0])),
+                     m(d.buffer.map((q) => q[1]))]);
     }
-    seguirDespuesDeCalibrar();
+    d.buffer = [];
+    d.i += 1;
+    if (d.i >= PUNTOS_DERIVA.length) return cerrarDeriva();
+    d.fase = "asentar"; d.desde = t;
+    pintarPuntoDeriva();
   }
 }
+
+function cerrarDeriva() {
+  const d = est.deriva;
+  // Sin al menos tres puntos no se ajusta una recta con ninguna confianza, y
+  // se prefiere no corregir antes que corregir mal: una ganancia equivocada
+  // amplifica el temblor, que es lo único que hasta ahora salió bien en todas
+  // las mediciones.
+  if (d.objetivos.length >= 3) {
+    est.correccion = Correccion.ajustar(d.objetivos, d.crudas);
+    console.log("[corrección]", est.correccion.resumen);
+  } else {
+    console.log("[corrección] solo", d.objetivos.length,
+                "puntos válidos: se sigue sin corregir");
+  }
+  seguirDespuesDeCalibrar();
+}
+
 
 function seguirDespuesDeCalibrar() {
   if (est.modo === "precision") {
@@ -810,8 +864,7 @@ function pasoTablero(datos, dt, t) {
     const [sx, sy] = est.suave.paso(px, py, dt);
     const med = est.ventana.empujar(sx, sy, t);
     if (med) {
-      const cx = med[0] + est.correccion[0];
-      const cy = med[1] + est.correccion[1];
+      const [cx, cy] = est.correccion.aplicar(med);
       muestra = { x: cx, y: cy, ok: true };
       cursor.style.transform = `translate(${cx}px, ${cy}px)`;
       cursor.hidden = false;

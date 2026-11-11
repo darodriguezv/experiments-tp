@@ -20,6 +20,8 @@
  * cuánto memorizó, no cuánto sirve. Esta grilla está desplazada a propósito.
  */
 
+import { ajusteEje } from "./correccion.js";
+
 export const PUNTOS_PRUEBA = [
   [0.25, 0.20], [0.50, 0.20], [0.75, 0.20],
   [0.25, 0.50], [0.50, 0.50], [0.75, 0.50],
@@ -193,6 +195,27 @@ function desvio(a) {
   return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length);
 }
 
+/** La recta que mejor explica el desvío, por eje, y lo que quedaría al
+ *  corregirla.
+ *
+ * `residuo` se mide sobre los MISMOS nueve puntos con los que se ajusta la
+ * recta, así que es optimista. Con cuatro parámetros sobre nueve puntos lo es
+ * poco, pero es un límite inferior y no una promesa: lo que de verdad queda
+ * después de corregir lo dice la siguiente medición, con la corrección puesta.
+ */
+export function ajusteAfin(prueba) {
+  const v = prueba.porPunto.filter((p) => p.n > 0);
+  if (v.length < 3) return null;
+  const ex = ajusteEje(v.map((p) => p.tx), v.map((p) => p.tx + p.dx));
+  const ey = ajusteEje(v.map((p) => p.ty), v.map((p) => p.ty + p.dy));
+  let s = 0;
+  for (const p of v) {
+    s += Math.hypot((p.tx + p.dx - ex.b) / ex.a - p.tx,
+                    (p.ty + p.dy - ey.b) / ey.a - p.ty);
+  }
+  return { ex, ey, residuo: s / v.length };
+}
+
 /** Lectura en texto, para copiar y pegar en un reporte. */
 export function informe(prueba) {
   const r = prueba.resumen();
@@ -214,15 +237,19 @@ export function informe(prueba) {
       ? "Domina el TEMBLOR: la mirada es ruidosa. El suavizado no alcanza."
       : "Sesgo y temblor son comparables.");
 
-  /* El desvío de CADA punto, con signo. Es lo que distingue dos fallos que el
-   * promedio del sesgo confunde:
+  /* El desvío de CADA punto, con signo, y la recta que lo explica. Es lo que
+   * distingue TRES fallos que el promedio del sesgo confunde:
    *
-   * - todos corridos en la MISMA dirección: desplazamiento uniforme, que es un
-   *   error de coordenadas y se puede localizar;
-   * - corridos HACIA el centro, más cuanto más lejos del centro: el modelo
-   *   colapsó y no sigue la mirada.
+   * - todos corridos en la MISMA dirección y en la misma medida: corrimiento
+   *   uniforme, y una constante lo arregla;
+   * - el desvío CRECE con la coordenada: la ganancia está mal, y ninguna
+   *   constante lo arregla, porque la que centra un extremo descentra el otro;
+   * - corridos HACIA el centro, más cuanto más lejos: el modelo colapsó.
    *
-   * Sin el signo, 300 px de sesgo se ven iguales en los dos casos. */
+   * La primera versión de esto solo miraba si había una dirección común, y por
+   * eso informó "desplazamiento uniforme" sobre una medición cuyo desvío
+   * horizontal iba de +18 px a +309 px según la columna. Eran dos problemas
+   * distintos, con dos arreglos distintos, leídos como el mismo. */
   L.push("");
   L.push("desvío por punto (x, y), en px:");
   for (const p of r.por_punto) {
@@ -236,8 +263,23 @@ export function informe(prueba) {
   L.push("");
   L.push(`desvío PROMEDIO: ${mdx >= 0 ? "+" : ""}${mdx.toFixed(0)}, `
        + `${mdy >= 0 ? "+" : ""}${mdy.toFixed(0)} px`);
-  L.push(Math.hypot(mdx, mdy) > 0.6 * r.sesgo
-    ? "Los nueve están corridos en la MISMA dirección: desplazamiento uniforme."
-    : "No hay una dirección común: el error cambia según la zona.");
+
+  const af = ajusteAfin(prueba);
+  if (af) {
+    L.push("");
+    L.push(`ganancia       x ${af.ex.a.toFixed(2)}   y ${af.ey.a.toFixed(2)}`
+         + `   (1.00 sería correcta)`);
+    L.push(`sesgo si se corrigiera la ganancia: ${af.residuo.toFixed(0)} px`
+         + `   (ahora ${r.sesgo.toFixed(0)} px)`);
+    const torcida = Math.abs(af.ex.a - 1) > 0.15 || Math.abs(af.ey.a - 1) > 0.15;
+    L.push(torcida
+      ? "La GANANCIA está mal: el desvío crece con la coordenada. Restar una "
+        + "constante no alcanza, hace falta corregir la escala."
+      : Math.hypot(mdx, mdy) > 0.6 * r.sesgo
+        ? "Corrimiento UNIFORME: los nueve están corridos igual, y una "
+          + "constante lo arregla."
+        : "Ni corrimiento parejo ni ganancia torcida: el error cambia según "
+          + "la zona, sin una regla simple.");
+  }
   return L.join("\n");
 }
