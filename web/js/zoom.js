@@ -37,8 +37,60 @@
 
 export const FACTOR = 2.5;
 export const PASOS = 1;
-export const DWELL_ACERCAR_MS = 450;
-/* Corto a propósito: equivocarse acercando no cuesta casi nada. Ver arriba. */
+export const DWELL_ACERCAR_MS = 800;
+/* Antes eran 450 ms y el objetivo de esta permanencia era la grilla ENTERA, o
+ * sea siempre el mismo. Como nunca cambiaba, nunca se reiniciaba: la cuenta
+ * arrancaba cuando aparecía el tablero y disparaba 450 ms después, mirara la
+ * persona donde mirara. Se veía como que acercaba solo, y acercaba a donde
+ * estuviera la mirada en ese instante y no a donde la persona quería ir.
+ *
+ * Ahora el objetivo es la ZONA, así que mover la mirada reinicia la cuenta y
+ * acercar exige haberse quedado quieto en algún lado. Con eso el número puede
+ * ser más largo sin que moleste: lo que se pide es que la mirada se asiente,
+ * no que espere. */
+
+/* Al entrar al tablero la mirada viene del último punto de la prueba y puede
+ * estar parada en cualquier zona. Sin esta pausa, el acercamiento dispara
+ * antes de que la persona haya mirado el tablero. */
+export const MS_ORIENTARSE = 600;
+
+/* Cuántas zonas por lado tiene la rejilla gruesa que decide "la mirada se
+ * asentó acá". Tres: con 90 px de error medido, una zona de medio millar de
+ * píxeles se sostiene sin esfuerzo, y 3x3 alcanza para distinguir a qué parte
+ * del tablero se quiere ir. Más finas y volvería a hacer falta la precisión
+ * que el acercamiento existe para no necesitar. */
+export const ZONAS = 3;
+
+/** En qué zona gruesa del tablero cae un punto, o null si cae afuera. */
+export function zonaEn(x, y, marco) {
+  if (!marco || !(marco.width > 0) || !(marco.height > 0)) return null;
+  if (x < marco.left || x >= marco.right) return null;
+  if (y < marco.top || y >= marco.bottom) return null;
+  const c = Math.min(ZONAS - 1,
+    Math.floor(((x - marco.left) / marco.width) * ZONAS));
+  const f = Math.min(ZONAS - 1,
+    Math.floor(((y - marco.top) / marco.height) * ZONAS));
+  return `z:${f}:${c}`;
+}
+
+/** Los límites de una zona. La permanencia los necesita para su margen de
+ *  pegado: sin eso, el temblor en el borde entre dos zonas reinicia la cuenta
+ *  una y otra vez y no se acerca nunca. */
+export function cajaZona(id, marco) {
+  // Se parte en vez de usar expresion regular: este archivo viaja por
+  // heredocs y las barras invertidas se han perdido en el camino mas de una
+  // vez, dejando un patron que no casa con nada y una funcion que devuelve
+  // null siempre. Partir no tiene nada que escapar.
+  const p = String(id || "").split(":");
+  if (!marco || p.length !== 3 || p[0] !== "z") return null;
+  const fi = Number(p[1]), co = Number(p[2]);
+  if (!Number.isInteger(fi) || !Number.isInteger(co)) return null;
+  if (fi < 0 || fi >= ZONAS || co < 0 || co >= ZONAS) return null;
+  const w = marco.width / ZONAS, h = marco.height / ZONAS;
+  const left = marco.left + co * w;
+  const top = marco.top + fi * h;
+  return { left, top, right: left + w, bottom: top + h, width: w, height: h };
+}
 
 export const MS_SIN_ELEGIR = 4000;
 /* Si en el estado acercado no se elige nada, se vuelve solo. Sin esto, alguien
@@ -86,13 +138,22 @@ export class Zoom {
     return this.acercado && this.desde && (t - this.desde) > MS_SIN_ELEGIR;
   }
 
-  /** Lo que hay que escribir en el style del contenedor. */
-  estilo() {
+  /** Lo que hay que escribir en el style del contenedor.
+   *
+   * `marco` es el rectángulo del contenedor SIN transformar. Hace falta
+   * porque `transform-origin` en píxeles se mide desde el borde del propio
+   * elemento y no desde el viewport, y la grilla no arranca en 0,0: tiene el
+   * panel del mensaje encima. Pasarle coordenadas de viewport acercaba
+   * centrado bastante más arriba de donde la persona estaba mirando.
+   */
+  estilo(marco) {
     if (!this.acercado || !this.origen) {
       return { transformOrigin: "50% 50%", transform: "none" };
     }
+    const ox = this.origen[0] - (marco ? marco.left : 0);
+    const oy = this.origen[1] - (marco ? marco.top : 0);
     return {
-      transformOrigin: `${this.origen[0]}px ${this.origen[1]}px`,
+      transformOrigin: `${ox}px ${oy}px`,
       transform: `scale(${this.escala})`,
     };
   }

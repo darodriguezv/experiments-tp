@@ -72,3 +72,38 @@ export function golpearEn(cajas, x, y) {
   }
   return null;
 }
+
+/** Las mismas cajas, como quedan después de un `scale(escala)` alrededor de
+ *  `origen`.
+ *
+ * Se CALCULAN en vez de volver a medirlas con `getBoundingClientRect()`, y el
+ * motivo es un fallo medido: `.grilla` tiene `transition: transform .18s`, así
+ * que medir justo después de fijar el estilo devuelve la geometría del
+ * ARRANQUE de la animación, no la final. Las cajas quedaban con el tamaño de
+ * antes de acercar y no se volvían a medir nunca, así que el puntero se veía
+ * sobre una celda y se marcaba otra.
+ *
+ * Esto no depende del reloj: da la geometría final en el mismo cuadro en que
+ * se dispara el acercamiento.
+ *
+ * @param {Map<string, DOMRect>} cajas  las cajas SIN transformar
+ * @param {[number,number]|null} origen centro del acercamiento, en viewport
+ * @param {number} escala
+ */
+export function escalar(cajas, origen, escala) {
+  if (!origen || !(escala > 0) || escala === 1) return cajas;
+  const [ox, oy] = origen;
+  const m = new Map();
+  for (const [id, r] of cajas) {
+    const left = ox + (r.left - ox) * escala;
+    const top = oy + (r.top - oy) * escala;
+    m.set(id, {
+      left, top,
+      right: ox + (r.right - ox) * escala,
+      bottom: oy + (r.bottom - oy) * escala,
+      width: r.width * escala,
+      height: r.height * escala,
+    });
+  }
+  return m;
+}

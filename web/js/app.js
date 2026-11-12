@@ -26,9 +26,11 @@ import { UMBRAL_PARPADEO } from "./rasgos.js";
 import { crearEstimador, ESTIMADORES, FalloEstimador } from "./estimador.js";
 import { Suavizador, VentanaMediana } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
-import { PAGINAS, dibujarPagina, medir, golpearEn } from "./tablero.js";
+import { PAGINAS, dibujarPagina, medir, golpearEn, escalar }
+  from "./tablero.js";
 import { SLM } from "./slm.js";
-import { Zoom, DWELL_ACERCAR_MS } from "./zoom.js";
+import { Zoom, DWELL_ACERCAR_MS, MS_ORIENTARSE, zonaEn, cajaZona }
+  from "./zoom.js";
 import { Correccion } from "./correccion.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
          zoomNecesario, informe as informePrecision }
@@ -125,7 +127,12 @@ const est = {
   deriva: null,
   slm: null,
   pagina: "core", palabras: [], letras: "",
+  // `cajasBase` son las cajas SIN acercar, que es de lo único que se
+  // puede medir con confianza: ver `escalar` en tablero.js. `cajas` son
+  // las vigentes, calculadas a partir de aquellas.
+  cajasBase: new Map(),
   cajas: new Map(),
+  marcoBase: null,
   candidatos: null,
   ultimoT: 0, fps: 0,
   stats: { dwells: 0, t0: null },
@@ -650,11 +657,12 @@ corrección: ${est.correccion.listo ? est.correccion.resumen : "ninguna"}`;
 function aplicarZoom() {
   const g = $("#escena").firstElementChild;
   if (!g) return;
-  Object.assign(g.style, est.zoom.estilo());
-  // Las cajas hay que volver a medirlas: getBoundingClientRect() ya tiene en
-  // cuenta la transformación, así que el impacto sobre las celdas funciona
-  // solo, pero con los valores viejos apuntaría a donde estaban antes.
-  est.cajas = medir($("#escena"));
+  Object.assign(g.style, est.zoom.estilo(est.marcoBase));
+  // Las cajas se CALCULAN, no se vuelven a medir. Medirlas acá devolvía la
+  // geometría del arranque de la transición de 180 ms y no la final, así que
+  // el mapa de impacto se quedaba con el tamaño de antes de acercar: el
+  // puntero se veía sobre una celda y se marcaba otra.
+  est.cajas = escalar(est.cajasBase, est.zoom.origen, est.zoom.escala);
   const ind = $("#zoom-ind");
   if (ind) {
     ind.hidden = !est.zoom.acercado;
@@ -824,14 +832,24 @@ function seguirDespuesDeCalibrar() {
   }
   mostrar("tablero");
   redibujar();
+  // Al entrar, la mirada viene del último punto de la prueba y puede estar
+  // parada sobre cualquier zona. Sin esta pausa acercaría antes de que la
+  // persona llegue a mirar el tablero.
+  est.dwellZoom.reiniciar();
+  est.dwellZoom.bloquear(MS_ORIENTARSE);
 }
 
 function redibujar() {
   const cont = $("#escena");
   if (est.candidatos) dibujarCandidatos(cont);
   else { dibujarPagina(cont, est.pagina); }
+  // Medir ANTES de transformar: estas son las cajas sin acercar, y de ellas
+  // salen las acercadas. El elemento acaba de nacer, así que todavía no tiene
+  // ninguna transformación encima.
+  est.cajasBase = medir(cont);
+  const g = cont.firstElementChild;
+  est.marcoBase = g ? g.getBoundingClientRect() : null;
   aplicarZoom();
-  est.cajas = medir(cont);
   pintarMensaje();
 }
 
@@ -873,13 +891,14 @@ function pasoTablero(datos, dt, t) {
 
   // --- primer tiempo: acercar donde cae la mirada ----------------------
   if (!est.zoom.acercado && !est.candidatos) {
+    // El objetivo es la ZONA, no la grilla entera. Con la grilla entera el
+    // objetivo nunca cambiaba, así que la permanencia nunca se reiniciaba y
+    // acercaba sola a los 450 ms de aparecer el tablero. Con zonas, mover la
+    // mirada reinicia: acercar pide haberse quedado quieto en algún lado.
     const z = est.dwellZoom.paso(
       muestra,
-      // Cualquier punto sobre la grilla sirve: no se elige una región de una
-      // lista, se acerca donde está mirando. Por eso no puede fallar.
-      (x, y) => (golpearEn(est.cajas, x, y) ? "grilla" : null),
-      () => ({ left: 0, top: 0, right: innerWidth, bottom: innerHeight,
-               width: innerWidth, height: innerHeight }));
+      (x, y) => zonaEn(x, y, est.marcoBase),
+      (id) => cajaZona(id, est.marcoBase));
     pintarAvanceZoom(z.avance);
     if (z.disparo) {
       est.zoom.acercar(muestra.x, muestra.y, t);
@@ -1045,7 +1064,12 @@ function hablar(frase) {
 }
 
 addEventListener("resize", () => {
-  if (est.fase === "tablero") est.cajas = medir($("#escena"));
+  if (est.fase !== "tablero") return;
+  // Se aleja primero: con la transformación puesta, lo que se mide son las
+  // cajas ya acercadas, y de ahí no se puede volver a las de base.
+  est.zoom.alejar();
+  est.dwellZoom.reiniciar();
+  redibujar();
 });
 
 iniciar();
