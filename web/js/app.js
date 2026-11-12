@@ -24,13 +24,13 @@
 
 import { UMBRAL_PARPADEO } from "./rasgos.js";
 import { crearEstimador, ESTIMADORES, FalloEstimador } from "./estimador.js";
-import { Suavizador, VentanaMediana } from "./suavizado.js";
+import { FiltroMirada } from "./suavizado.js";
 import { Permanencia } from "./permanencia.js";
 import { PAGINAS, dibujarPagina, medir, golpearEn, escalar }
   from "./tablero.js";
 import { SLM } from "./slm.js";
-import { Zoom, DWELL_ACERCAR_MS, MS_ORIENTARSE, zonaEn, cajaZona }
-  from "./zoom.js";
+import { Zoom, Fijacion, ParpadeoLargo, MS_ORIENTARSE,
+         MS_PAUSA_TRAS_ALEJAR, MS_MIRAR_AFUERA } from "./zoom.js";
 import { Correccion } from "./correccion.js";
 import { PruebaPrecision, PUNTOS_PRUEBA, aciertoPorGrilla,
          zoomNecesario, informe as informePrecision }
@@ -105,7 +105,7 @@ function estimadorElegido() {
     const v = localStorage.getItem(CLAVE_ESTIMADOR);
     if (ESTIMADORES.some((e) => e.clave === v)) return v;
   } catch (_) { /* modo privado */ }
-  return "propio";
+  return "webgazer";
 }
 
 const est = {
@@ -115,13 +115,13 @@ const est = {
   mirada: null,                 // el estimador en uso
   estimador: estimadorElegido(),
   diag: null,                   // lo que devolvió ajustar()
-  suave: new Suavizador(),
-  ventana: new VentanaMediana(320),
+  filtro: new FiltroMirada(),
   dwell: new Permanencia(),
   // Dos permanencias distintas: acercar es barato de equivocar,
   // elegir no. Ver zoom.js.
-  dwellZoom: new Permanencia({ dwellMs: DWELL_ACERCAR_MS,
-                               refractarioMs: 250 }),
+  fijacion: new Fijacion(),
+  parpadeo: new ParpadeoLargo(),
+  afueraDesde: 0,
   zoom: new Zoom(),
   correccion: new Correccion(),   // identidad hasta que se ajuste
   deriva: null,
@@ -521,8 +521,7 @@ async function terminarCalibracion() {
     return calibracionMala(rec);
   }
 
-  est.suave.reiniciar();
-  est.ventana.limpiar();
+  est.filtro.reiniciar();
   est.stats = { dwells: 0, t0: null };
   // El contexto va al prompt SOLO en la condición contextualizada. Es la
   // variable independiente de esa comparación: todo lo demás -modelo, prompt,
@@ -574,8 +573,7 @@ function pasoPrecision(datos, dt, t) {
   let muestra = { x: 0, y: 0, ok: false };
   if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO) {
     const [px, py] = datos.cruda;
-    const [sx, sy] = est.suave.paso(px, py, dt);
-    const med = est.ventana.empujar(sx, sy, t);
+    const med = est.filtro.paso(px, py, t);
     if (med) {
       const [cx, cy] = est.correccion.aplicar(med);
       muestra = { x: cx, y: cy, ok: true };
@@ -667,7 +665,7 @@ function aplicarZoom() {
   if (ind) {
     ind.hidden = !est.zoom.acercado;
     ind.textContent = est.zoom.acercado
-      ? `${est.zoom.escala.toFixed(1)}x` : "";
+      ? `${est.zoom.escala.toFixed(1)}x · cierre los ojos para volver` : "";
   }
 }
 
@@ -771,8 +769,7 @@ function pasoDeriva(datos, dt, t) {
     // Se predice SIN la corrección vigente: lo que se quiere medir es el
     // desvío crudo del modelo, no el que queda después de corregir.
     const [px, py] = datos.cruda;
-    const [sx, sy] = est.suave.paso(px, py, dt);
-    const med = est.ventana.empujar(sx, sy, t);
+    const med = est.filtro.paso(px, py, t);
     if (med) muestra = med;
   }
 
@@ -835,8 +832,8 @@ function seguirDespuesDeCalibrar() {
   // Al entrar, la mirada viene del último punto de la prueba y puede estar
   // parada sobre cualquier zona. Sin esta pausa acercaría antes de que la
   // persona llegue a mirar el tablero.
-  est.dwellZoom.reiniciar();
-  est.dwellZoom.bloquear(MS_ORIENTARSE);
+  est.fijacion.reiniciar();
+  est.fijacion.bloquear(MS_ORIENTARSE, performance.now());
 }
 
 function redibujar() {
@@ -877,10 +874,19 @@ function pasoTablero(datos, dt, t) {
   const cursor = $("#cursor");
   let muestra = { x: 0, y: 0, ok: false };
 
-  if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO) {
+  // Cerrar los ojos un momento cancela todo: es la salida que no depende de
+  // acertarle a nada con la mirada.
+  if (est.parpadeo.paso(datos ? datos.ear : NaN, !!datos, t)) {
+    cancelar(t, false);
+    return pintarMedidor();
+  }
+
+  // Con los ojos cerrados el estimador sigue entregando una posición, y es
+  // basura: no se usa, o arrastraría el cursor mientras se parpadea.
+  if (datos && datos.cruda && datos.ear > UMBRAL_PARPADEO
+      && !est.parpadeo.cerrado) {
     const [px, py] = datos.cruda;
-    const [sx, sy] = est.suave.paso(px, py, dt);
-    const med = est.ventana.empujar(sx, sy, t);
+    const med = est.filtro.paso(px, py, t);
     if (med) {
       const [cx, cy] = est.correccion.aplicar(med);
       muestra = { x: cx, y: cy, ok: true };
@@ -889,40 +895,54 @@ function pasoTablero(datos, dt, t) {
     }
   }
 
-  // --- primer tiempo: acercar donde cae la mirada ----------------------
+  const m = est.marcoBase;
+  const enTablero = muestra.ok && !!m
+    && muestra.x >= m.left && muestra.x < m.right
+    && muestra.y >= m.top && muestra.y < m.bottom;
+
+  // --- primer tiempo: acercar donde la mirada se quedó quieta -----------
   if (!est.zoom.acercado && !est.candidatos) {
-    // El objetivo es la ZONA, no la grilla entera. Con la grilla entera el
-    // objetivo nunca cambiaba, así que la permanencia nunca se reiniciaba y
-    // acercaba sola a los 450 ms de aparecer el tablero. Con zonas, mover la
-    // mirada reinicia: acercar pide haberse quedado quieto en algún lado.
-    const z = est.dwellZoom.paso(
-      muestra,
-      (x, y) => zonaEn(x, y, est.marcoBase),
-      (id) => cajaZona(id, est.marcoBase));
+    const z = est.fijacion.paso(muestra, enTablero, t);
     pintarAvanceZoom(z.avance);
     if (z.disparo) {
-      est.zoom.acercar(muestra.x, muestra.y, t);
+      est.zoom.acercar(z.disparo[0], z.disparo[1], t);
       aplicarZoom();
+      est.afueraDesde = 0;
       est.dwell.reiniciar();
-      est.dwell.bloquear(200);
+      est.dwell.bloquear(250);
+      pintarAvanceZoom(0);
     }
-    return;
+    return pintarMedidor();
   }
 
-  // Si se acercó a la zona equivocada, se vuelve solo. Sin esto habría que
-  // adivinar cuál celda es la de salir.
-  if (est.zoom.venció(t)) {
-    est.zoom.alejar();
-    aplicarZoom();
-    est.dwellZoom.reiniciar();
-    return;
+  // --- acercado: mirar fuera del tablero también aleja ------------------
+  if (est.zoom.acercado) {
+    if (muestra.ok && !enTablero) {
+      if (!est.afueraDesde) est.afueraDesde = t;
+      else if (t - est.afueraDesde > MS_MIRAR_AFUERA) {
+        cancelar(t, false);
+        return pintarMedidor();
+      }
+    } else if (muestra.ok) {
+      est.afueraDesde = 0;
+    }
   }
 
   // --- segundo tiempo: elegir, ya con las celdas grandes ----------------
+  // Acercada, la grilla sigue más allá del borde visible: lo que quedó
+  // tapado no se puede elegir.
   const r = est.dwell.paso(
     muestra,
-    (x, y) => golpearEn(est.cajas, x, y),
+    (x, y) => ((est.zoom.acercado && !enTablero)
+      ? null : golpearEn(est.cajas, x, y)),
     (id) => est.cajas.get(id) ?? null);
+
+  // Pasó el tiempo sin elegir nada. No se corta una selección que ya va por
+  // la mitad: faltarían décimas para completarla.
+  if (est.zoom.venció(t) && r.avance < 0.5 && !r.disparo) {
+    cancelar(t, true);
+    return pintarMedidor();
+  }
 
   est.cajas.forEach((_, id) => {
     const el = $(`[data-id="${CSS.escape(id)}"]`);
@@ -936,10 +956,39 @@ function pasoTablero(datos, dt, t) {
     const el = $(`[data-id="${CSS.escape(r.disparo)}"]`);
     est.zoom.alejar();
     aplicarZoom();
-    est.dwellZoom.reiniciar();
+    est.afueraDesde = 0;
+    est.fijacion.reiniciar();
+    est.fijacion.bloquear(MS_PAUSA_TRAS_ALEJAR, t);
     if (el) aplicar(el.dataset.accion);
   }
+  pintarMedidor();
+}
 
+/** Aleja y reinicia lo que se estuviera acumulando.
+ *
+ * @param {boolean} porTiempo  si se alejó solo, por pasar el tiempo. En ese
+ *   caso la persona estuvo mirando ahí sin elegir, y no se vuelve a acercar
+ *   en el mismo lugar hasta que la mirada se haya ido a otro lado. Si lo
+ *   pidió ella -cerrando los ojos o mirando afuera- no hace falta.
+ */
+function cancelar(t, porTiempo) {
+  const donde = est.zoom.origen;
+  est.zoom.alejar();
+  aplicarZoom();
+  est.afueraDesde = 0;
+  est.dwell.reiniciar();
+  est.dwell.bloquear(MS_PAUSA_TRAS_ALEJAR);
+  est.fijacion.reiniciar();
+  est.fijacion.bloquear(MS_PAUSA_TRAS_ALEJAR, t);
+  if (porTiempo && donde) est.fijacion.exigirMovimiento(donde);
+  pintarAvanceZoom(0);
+  document.querySelectorAll("#escena .viva").forEach((el) => {
+    el.classList.remove("viva");
+    el.style.setProperty("--avance", 0);
+  });
+}
+
+function pintarMedidor() {
   $("#fps").textContent = est.fps.toFixed(0) + " fps";
   $("#dwells").textContent = est.stats.dwells;
   const diag = $("#diag");
@@ -1068,7 +1117,7 @@ addEventListener("resize", () => {
   // Se aleja primero: con la transformación puesta, lo que se mide son las
   // cajas ya acercadas, y de ahí no se puede volver a las de base.
   est.zoom.alejar();
-  est.dwellZoom.reiniciar();
+  est.fijacion.reiniciar();
   redibujar();
 });
 

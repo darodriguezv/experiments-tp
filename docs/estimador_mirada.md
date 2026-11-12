@@ -253,6 +253,63 @@ con el medido (186 px simulados contra 206 px reales), la curva de validación
 tiene un mínimo claro y la mejora es del orden del 25%. Es una mejora real, no
 una transformación: queda pendiente medirla en la máquina.
 
+### Corrección: el filtro de suavizado contaminaba las mediciones
+
+Todo lo medido hasta acá —las dos sesiones de WebGazer y las del estimador
+propio— pasó por una cadena de suavizado que nunca se había probado sola:
+Kalman con estado de velocidad, media exponencial y mediana de 320 ms. Probada
+con un escalón de 600 px a 30 cuadros por segundo:
+
+| tiempo desde el salto | error del cursor |
+|---|---|
+| 1.07 s | le faltan 69 px |
+| 2.13 s | se pasó 143 px |
+| 3.47 s | sigue 61 px pasado |
+| 4.07 s | recién dentro de 20 px |
+
+A 15 cuadros por segundo tarda 7 s. El estado de velocidad no tenía
+amortiguación: acumulaba impulso durante el viaje y seguía de largo.
+
+La prueba de precisión espera 1 s y mide entre 1.0 y 2.2 s después de cada
+salto, o sea exactamente mientras el filtro se pasaba. En promedio sobre esa
+ventana, el error sistemático es el 12% del largo del salto, en el sentido
+del salto. Con el recorrido de la prueba —384 px entre columnas, y 768 px de
+vuelta al empezar cada fila— eso predice:
+
+```
+columna            izquierda   centro   derecha
+predicho (filtro)     -94        +47      +47   px
+medido, sesión 2      -61        +36      +54   px
+```
+
+**La "ganancia residual de 1.15" y la "curvatura de 27 px" de la segunda
+sesión son, casi enteras, este artefacto.** La lectura que se hizo en su
+momento —que la curvatura delataba a la regularización de WebGazer— no se
+sostiene con esta evidencia. Lo que se dijo sobre la matriz singular y la
+cresta de fábrica es cierto y se verificó contra el código, y elegirla por
+validación cruzada sigue siendo lo correcto; pero la curvatura no lo probaba.
+
+La fase de corrección de ganancia medía con el mismo filtro, así que sus
+ganancias también estaban infladas en el sentido de cada salto. La ganancia
+horizontal de la primera sesión (1.38) está sobreestimada por la misma razón,
+aunque el artefacto no alcanza a explicarla entera.
+
+El filtro nuevo es una mediana sobre una ventana que se acorta sola cuando
+detecta un salto. Una mediana no tiene impulso y no puede pasarse. Simulado en
+las mismas condiciones:
+
+| | filtro anterior | filtro nuevo |
+|---|---|---|
+| llega a 50 px del objetivo | 1.0 – 1.5 s | 0.2 – 0.5 s |
+| error sistemático en la ventana de medición | hasta 77 px | menos de 8 px |
+| temblor con señal cruda de 100 px | 20 px | 29 px |
+
+Cuesta algo de temblor con señal muy ruidosa y lo vale: el temblor se
+promedia, el error sistemático no.
+
+**Ninguna de las mediciones anteriores es comparable con las que sigan.** Hay
+que volver a medir los dos estimadores.
+
 ## Límites de esta investigación
 
 - **Una sola persona.** Todas las sesiones son del mismo usuario en el mismo

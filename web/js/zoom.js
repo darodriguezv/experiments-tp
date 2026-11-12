@@ -37,62 +37,201 @@
 
 export const FACTOR = 2.5;
 export const PASOS = 1;
-export const DWELL_ACERCAR_MS = 800;
-/* Antes eran 450 ms y el objetivo de esta permanencia era la grilla ENTERA, o
- * sea siempre el mismo. Como nunca cambiaba, nunca se reiniciaba: la cuenta
- * arrancaba cuando aparecía el tablero y disparaba 450 ms después, mirara la
- * persona donde mirara. Se veía como que acercaba solo, y acercaba a donde
- * estuviera la mirada en ese instante y no a donde la persona quería ir.
+export const DWELL_ACERCAR_MS = 1000;
+/* Cuánto tiene que durar una FIJACIÓN para que se acerque.
  *
- * Ahora el objetivo es la ZONA, así que mover la mirada reinicia la cuenta y
- * acercar exige haberse quedado quieto en algún lado. Con eso el número puede
- * ser más largo sin que moleste: lo que se pide es que la mirada se asiente,
- * no que espere. */
+ * Esta permanencia tuvo dos versiones que acercaban antes de tiempo, y las dos
+ * por lo mismo: lo que contaban no era "la mirada se asentó".
+ *
+ * - La primera tenía por objetivo la grilla entera. Nunca cambiaba, así que
+ *   nunca se reiniciaba: acercaba a los 450 ms de aparecer el tablero.
+ * - La segunda contaba el tiempo dentro de una zona de un tercio de pantalla.
+ *   Pero recorrer el tablero leyendo celdas pasa casi todo dentro de una
+ *   zona, así que acercaba mientras la persona todavía estaba buscando.
+ *
+ * Lo que distingue buscar de haber encontrado no es dónde está la mirada sino
+ * si SE MUEVE: leyendo, salta de celda en celda; decidida, se queda. Eso es
+ * una fijación, y se detecta por dispersión: ver DISPERSION_FIJACION. */
+export const DISPERSION_FIJACION = 180;
+/* El lado máximo, en píxeles, del rectángulo que encierra todo lo que recorrió
+ * la mirada durante la fijación. Es el criterio clásico de dispersión.
+ *
+ * Se mide el rectángulo entero y no la distancia a un promedio que se va
+ * actualizando. La diferencia se midió: una mirada que alterna entre dos
+ * celdas deja el promedio en el medio y cada muestra a poco más de 100 px de
+ * él, así que con un radio alrededor del promedio eso pasaba por estar quieto.
+ * El rectángulo no se deja engañar: mide de punta a punta.
+ *
+ * 180 px: una fijación real, con el cursor más tembloroso que se simuló,
+ * recorre unos 150; saltar a la celda de al lado son 307. */
 
-/* Al entrar al tablero la mirada viene del último punto de la prueba y puede
- * estar parada en cualquier zona. Sin esta pausa, el acercamiento dispara
- * antes de que la persona haya mirado el tablero. */
+export const DERIVA_FIJACION = 60;
+/* Cuánto puede correrse el centro entre la primera y la segunda mitad de la
+ * fijación. El rectángulo solo no alcanza: con señal ruidosa el filtro
+ * convierte un salto corto en un deslizamiento lento, y la mirada que pasó
+ * de una celda a la de 240 px más allá entraba entera en 180 px. Se veía
+ * como quieta y acercaba en el medio de las dos. Una fijación de verdad no
+ * tiene dirección: su primera mitad y su segunda mitad caen en el mismo
+ * lugar. */
+
+/* Al entrar al tablero la mirada viene del último punto de la prueba. */
 export const MS_ORIENTARSE = 600;
 
-/* Cuántas zonas por lado tiene la rejilla gruesa que decide "la mirada se
- * asentó acá". Tres: con 90 px de error medido, una zona de medio millar de
- * píxeles se sostiene sin esfuerzo, y 3x3 alcanza para distinguir a qué parte
- * del tablero se quiere ir. Más finas y volvería a hacer falta la precisión
- * que el acercamiento existe para no necesitar. */
-export const ZONAS = 3;
+/* Después de alejar no se vuelve a acercar enseguida: sin esto, quien se queda
+ * mirando el mismo lugar vuelve a quedar acercado y siente que no puede
+ * salir. */
+export const MS_PAUSA_TRAS_ALEJAR = 700;
 
-/** En qué zona gruesa del tablero cae un punto, o null si cae afuera. */
-export function zonaEn(x, y, marco) {
-  if (!marco || !(marco.width > 0) || !(marco.height > 0)) return null;
-  if (x < marco.left || x >= marco.right) return null;
-  if (y < marco.top || y >= marco.bottom) return null;
-  const c = Math.min(ZONAS - 1,
-    Math.floor(((x - marco.left) / marco.width) * ZONAS));
-  const f = Math.min(ZONAS - 1,
-    Math.floor(((y - marco.top) / marco.height) * ZONAS));
-  return `z:${f}:${c}`;
+/* Cerrar los ojos este tiempo cancela: aleja y reinicia lo que se estuviera
+ * acumulando. Un parpadeo espontáneo dura entre 100 y 300 ms, así que con 400
+ * no se dispara solo, y sostenerlo no cuesta esfuerzo. */
+export const MS_PARPADEO_LARGO = 400;
+
+/* Mirar fuera del tablero este tiempo, estando acercado, también aleja. */
+export const MS_MIRAR_AFUERA = 600;
+
+/** Detecta que la mirada se quedó quieta, por dispersión. */
+export class Fijacion {
+  constructor({ ms = DWELL_ACERCAR_MS, dispersion = DISPERSION_FIJACION,
+                deriva = DERIVA_FIJACION, graciaMs = 300 } = {}) {
+    this.ms = ms; this.dispersion = dispersion; this.graciaMs = graciaMs;
+    this.deriva = deriva;
+    this.bloqueoHasta = 0;
+    this.evitar = null;
+    this.ultimoVisto = 0;
+    this.reiniciar();
+  }
+
+  reiniciar() {
+    this.caja = null; this.desde = 0;
+    this.inicio = [0, 0, 0]; this.final = [0, 0, 0];
+  }
+
+  empezarEn(x, y, t) {
+    this.caja = [x, x, y, y]; this.desde = t;
+    this.inicio = [0, 0, 0]; this.final = [0, 0, 0];
+  }
+
+  bloquear(ms, t) { this.bloqueoHasta = Math.max(this.bloqueoHasta, t + ms); }
+
+  /** No cuenta nada hasta que la mirada se haya ido de `punto`. Es para
+   *  cuando se alejó por tiempo: la persona estuvo mirando ahí sin elegir. */
+  exigirMovimiento(punto) { this.evitar = punto ? [punto[0], punto[1]] : null; }
+
+  /**
+   * @param {{x:number,y:number,ok:boolean}} muestra
+   * @param {boolean} enTablero  si ese punto cae sobre el tablero
+   * @param {number} t  milisegundos
+   * @returns {{avance:number, disparo:[number,number]|null}}
+   */
+  paso(muestra, enTablero, t) {
+    const nada = { avance: 0, disparo: null };
+    if (!muestra.ok) {
+      // Un parpadeo corto no rompe la fijación; perder la mirada, sí.
+      if (t - this.ultimoVisto > this.graciaMs) this.reiniciar();
+      return { avance: this.avance(t), disparo: null };
+    }
+    this.ultimoVisto = t;
+    if (t < this.bloqueoHasta || !enTablero) { this.reiniciar(); return nada; }
+
+    const { x, y } = muestra;
+    if (this.evitar) {
+      const lejos = Math.hypot(x - this.evitar[0], y - this.evitar[1])
+                  > this.dispersion;
+      if (!lejos) { this.reiniciar(); return nada; }
+      this.evitar = null;
+    }
+
+    const c = this.caja;
+    if (c) {
+      c[0] = Math.min(c[0], x); c[1] = Math.max(c[1], x);
+      c[2] = Math.min(c[2], y); c[3] = Math.max(c[3], y);
+    }
+    if (!c || c[1] - c[0] > this.dispersion || c[3] - c[2] > this.dispersion) {
+      // Se movió: empieza otra fijación acá.
+      this.empezarEn(x, y, t);
+      return nada;
+    }
+
+    // Dónde acercar: el promedio de la SEGUNDA mitad de la fijación. La
+    // primera mitad es la más ruidosa -el filtro recién llegaba- y una sola
+    // muestra, la última, tiembla demasiado para centrar con ella.
+    const mitad = t - this.desde >= this.ms / 2 ? this.final : this.inicio;
+    mitad[0] += x; mitad[1] += y; mitad[2] += 1;
+
+    if (t - this.desde >= this.ms) {
+      const a = this.inicio, f = this.final;
+      const fin = f[2] ? [f[0] / f[2], f[1] / f[2]] : [x, y];
+      const ini = a[2] ? [a[0] / a[2], a[1] / a[2]] : fin;
+      if (Math.hypot(fin[0] - ini[0], fin[1] - ini[1]) > this.deriva) {
+        // Venía deslizándose: no estaba quieta. Se sigue contando desde acá.
+        this.empezarEn(x, y, t);
+        return nada;
+      }
+      this.reiniciar();
+      return { avance: 0, disparo: fin };
+    }
+    return { avance: this.avance(t), disparo: null };
+  }
+
+  avance(t) {
+    return this.caja ? Math.min(1, (t - this.desde) / this.ms) : 0;
+  }
 }
 
-/** Los límites de una zona. La permanencia los necesita para su margen de
- *  pegado: sin eso, el temblor en el borde entre dos zonas reinicia la cuenta
- *  una y otra vez y no se acerca nunca. */
-export function cajaZona(id, marco) {
-  // Se parte en vez de usar expresion regular: este archivo viaja por
-  // heredocs y las barras invertidas se han perdido en el camino mas de una
-  // vez, dejando un patron que no casa con nada y una funcion que devuelve
-  // null siempre. Partir no tiene nada que escapar.
-  const p = String(id || "").split(":");
-  if (!marco || p.length !== 3 || p[0] !== "z") return null;
-  const fi = Number(p[1]), co = Number(p[2]);
-  if (!Number.isInteger(fi) || !Number.isInteger(co)) return null;
-  if (fi < 0 || fi >= ZONAS || co < 0 || co >= ZONAS) return null;
-  const w = marco.width / ZONAS, h = marco.height / ZONAS;
-  const left = marco.left + co * w;
-  const top = marco.top + fi * h;
-  return { left, top, right: left + w, bottom: top + h, width: w, height: h };
+/** Avisa UNA vez cuando los ojos llevan cerrados más de lo que dura un
+ *  parpadeo espontáneo.
+ *
+ * "Cerrado" se decide contra la apertura normal de ESTA persona con ESTA
+ * cámara, no contra un número fijo. El umbral fijo que usa el resto del
+ * sistema es 0.14, y un ojo cerrado mide entre 0.09 y 0.18 según la cara, la
+ * distancia y la proporción del cuadro: justo en el borde. Con un gesto del
+ * que depende poder salir, "a veces no lo detecta" no sirve.
+ *
+ * La apertura normal se aprende sola: es un promedio lento de lo que se ve
+ * mientras el ojo está abierto. Cerrado es caer por debajo de una fracción de
+ * eso.
+ */
+export class ParpadeoLargo {
+  constructor({ ms = MS_PARPADEO_LARGO, fraccion = 0.6, piso = 0.14 } = {}) {
+    this.ms = ms; this.fraccion = fraccion; this.piso = piso;
+    this.base = null;        // apertura normal aprendida
+    this.desde = null; this.avisado = false;
+    this.cerrado = false;
+  }
+
+  /**
+   * @param {number} ear       apertura del párpado en este cuadro
+   * @param {boolean} hayCara  el detector ve la cara. Sin cara no se puede
+   *                           saber, y perderla no es parpadear.
+   * @returns {boolean} true en el cuadro en que el cierre pasa a ser largo
+   */
+  paso(ear, hayCara, t) {
+    if (!hayCara || !Number.isFinite(ear)) {
+      this.desde = null; this.avisado = false; this.cerrado = false;
+      return false;
+    }
+    if (this.base === null) this.base = ear;
+    const umbral = Math.max(this.piso, this.fraccion * this.base);
+    this.cerrado = ear < umbral;
+
+    if (!this.cerrado) {
+      // Solo se aprende con el ojo abierto, y despacio: un parpadeo no puede
+      // bajar la referencia contra la que se mide el siguiente.
+      this.base += 0.02 * (ear - this.base);
+      this.desde = null; this.avisado = false;
+      return false;
+    }
+    if (this.desde === null) { this.desde = t; return false; }
+    if (!this.avisado && t - this.desde >= this.ms) {
+      this.avisado = true;
+      return true;
+    }
+    return false;
+  }
 }
 
-export const MS_SIN_ELEGIR = 4000;
+export const MS_SIN_ELEGIR = 5000;
 /* Si en el estado acercado no se elige nada, se vuelve solo. Sin esto, alguien
  * que se acercó a la zona equivocada queda atrapado mirando celdas que no
  * quiere, y la única salida sería adivinar cuál es la de volver. */

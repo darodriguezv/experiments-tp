@@ -1,8 +1,9 @@
 /* La máquina de estados del acercamiento, y la cuenta que lo justifica. */
-import { Zoom, aciertoEsperado, zonaEn, cajaZona, ZONAS,
-         DWELL_ACERCAR_MS, MS_ORIENTARSE } from "../js/zoom.js";
+import { Zoom, aciertoEsperado, Fijacion, ParpadeoLargo, DWELL_ACERCAR_MS,
+         MS_ORIENTARSE, MS_PAUSA_TRAS_ALEJAR, MS_PARPADEO_LARGO }
+  from "../js/zoom.js";
+import { FiltroMirada } from "../js/suavizado.js";
 import { golpearEn, escalar } from "../js/tablero.js";
-import { Permanencia } from "../js/permanencia.js";
 
 const fallos = [];
 const ok = (n, c, x = "") =>
@@ -31,7 +32,9 @@ ok("no acerca más allá de los pasos configurados",
    z.acercar(900, 500, 1100) === false);
 
 ok("no vence todavía", !z.venció(2000));
-ok("vence pasados 4 s sin elegir", z.venció(1000 + 4100));
+ok("no vence a los 4 s: una selección lleva más de 1 s y hay que poder reintentar",
+   !z.venció(1000 + 4100));
+ok("vence pasados 5 s sin elegir", z.venció(1000 + 5100));
 
 z.alejar();
 ok("alejar vuelve al estado inicial",
@@ -131,84 +134,180 @@ ok("acercar agranda las celdas por el factor",
 ok("sin acercar, las cajas son las mismas",
    escalar(base, null, 1) === base && escalar(base, ORIGEN, 1) === base);
 
-/* --------------------------------------------------------- las zonas */
-
-ok(`la rejilla gruesa tiene ${ZONAS}x${ZONAS} zonas`, ZONAS === 3);
+/* ------------------------------------------------ acercar por FIJACIÓN
+ *
+ * Dos versiones anteriores acercaban antes de tiempo. La primera contaba el
+ * tiempo sobre la grilla entera; la segunda, dentro de una zona de un tercio
+ * de pantalla. Ninguna medía lo que importa: si la mirada se quedó quieta.
+ * Leyendo el tablero la mirada salta de celda en celda sin salir de una zona,
+ * y con las dos versiones eso acercaba igual. */
 
 const MARCO2 = { left: 0, top: 120, right: 1536, bottom: 737,
                  width: 1536, height: 617 };
+const dentro = (x, y) => x >= MARCO2.left && x < MARCO2.right
+                      && y >= MARCO2.top && y < MARCO2.bottom;
 
-const vistas = new Set();
-for (let fi = 0; fi < ZONAS; fi++) {
-  for (let c = 0; c < ZONAS; c++) {
-    const r = cajaZona(`z:${fi}:${c}`, MARCO2);
-    vistas.add(zonaEn((r.left + r.right) / 2, (r.top + r.bottom) / 2, MARCO2));
+let sem = 4242;
+const azar = () => (sem = (sem * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+const gauss = () => Math.sqrt(-2 * Math.log(azar() + 1e-12))
+                  * Math.cos(2 * Math.PI * azar());
+
+/** Corre una trayectoria de mirada y devuelve cuándo acercó, o null. */
+function correr(fij, dondeMira, ms, { desde = 0, ruido = 20 } = {}) {
+  for (let t = desde; t < desde + ms; t += 33) {
+    const [x, y] = dondeMira(t - desde);
+    const m = { x: x + ruido * gauss(), y: y + ruido * gauss(), ok: true };
+    const r = fij.paso(m, dentro(m.x, m.y), t);
+    if (r.disparo) return { t: t - desde, en: r.disparo };
   }
+  return null;
 }
-ok("el centro de cada zona cae en esa misma zona",
-   vistas.size === ZONAS * ZONAS && !vistas.has(null), [...vistas].join(" "));
-ok("fuera del tablero no hay zona",
-   zonaEn(-5, 400, MARCO2) === null && zonaEn(400, 50, MARCO2) === null
-   && zonaEn(400, 900, MARCO2) === null);
-ok("sin marco tampoco inventa una", zonaEn(400, 400, null) === null);
-ok("una zona mide un tercio del tablero por lado",
-   Math.abs(cajaZona("z:1:1", MARCO2).width - MARCO2.width / 3) < 1e-9);
-ok("un id que no es de zona no devuelve caja",
-   cajaZona("a:2:3", MARCO2) === null && cajaZona(null, MARCO2) === null);
 
-/* Mover la mirada de un lado al otro TIENE que cambiar de zona: es lo que
- * reinicia la permanencia. Con el objetivo viejo -la grilla entera- esto daba
- * siempre el mismo valor y por eso acercaba sola. */
-ok("mirar a izquierda y a derecha da zonas distintas",
-   zonaEn(100, 400, MARCO2) !== zonaEn(1400, 400, MARCO2));
-ok("y arriba y abajo también",
-   zonaEn(700, 180, MARCO2) !== zonaEn(700, 700, MARCO2));
+// Mirar fijo una celda: acerca, y no antes de tiempo.
+let fij = new Fijacion();
+let res = correr(fij, () => [700, 400], 4000);
+ok("mirar fijo un lugar acerca", res !== null);
+ok("pero no antes de la permanencia completa",
+   res && res.t >= DWELL_ACERCAR_MS, String(res?.t));
+ok("y acerca centrado donde se estuvo mirando",
+   res && Math.hypot(res.en[0] - 700, res.en[1] - 400) < 25,
+   String(res?.en));
 
-ok("acercar pide más que antes de los 450 ms de la grilla entera",
-   DWELL_ACERCAR_MS >= 700, String(DWELL_ACERCAR_MS));
-ok("y al entrar al tablero hay una pausa para orientarse",
-   MS_ORIENTARSE > 0, String(MS_ORIENTARSE));
+// Leer el tablero: saltar de celda en celda cada 600 ms, dentro de la misma
+// zona. Es exactamente lo que antes acercaba solo.
+fij = new Fijacion();
+const celdas = [[160, 190], [460, 190], [160, 310], [460, 310], [160, 430]];
+res = correr(fij, (t) => celdas[Math.floor(t / 600) % celdas.length], 15000);
+ok("recorrer el tablero leyendo NO acerca", res === null, JSON.stringify(res));
 
+// Pasar a la celda de al lado -307 px en el tablero más fino- ya cuenta
+// como moverse.
+fij = new Fijacion();
+res = correr(fij, (t) => [t < 700 ? 500 : 807, 400], 1500);
+ok("pasar a la celda vecina reinicia la cuenta", res === null,
+   JSON.stringify(res));
 
-/* ------------------------- la permanencia de acercar, con zonas de verdad
+// Fuera del tablero no se acumula nada.
+fij = new Fijacion();
+res = correr(fij, () => [700, 60], 4000, { ruido: 5 });
+ok("mirar el mensaje, fuera del tablero, no acerca", res === null);
 
- * El fallo reportado: "al mirar se hace zoom inmediatamente". El objetivo de
- * esta permanencia era la grilla ENTERA, o sea un valor constante. Como nunca
- * cambiaba, nunca se reiniciaba: la cuenta arrancaba al aparecer el tablero y
- * disparaba 450 ms después, mirara la persona donde mirara.
- *
- * Con zonas, mover la mirada cambia el objetivo y eso reinicia la cuenta. */
+// Un parpadeo corto no rompe la fijación; perder la mirada medio segundo, sí.
+fij = new Fijacion();
+for (let t = 0; t < 600; t += 33) fij.paso({ x: 700, y: 400, ok: true }, true, t);
+for (let t = 600; t < 800; t += 33) fij.paso({ x: 0, y: 0, ok: false }, false, t);
+ok("un parpadeo corto no reinicia la fijación",
+   fij.paso({ x: 702, y: 401, ok: true }, true, 810).avance > 0.5);
+for (let t = 820; t < 1400; t += 33) fij.paso({ x: 0, y: 0, ok: false }, false, t);
+ok("perder la mirada medio segundo sí la reinicia",
+   fij.paso({ x: 702, y: 401, ok: true }, true, 1410).avance === 0);
 
-const dwellZoom = new Permanencia({ dwellMs: DWELL_ACERCAR_MS });
-const mirarA = (x, y) => dwellZoom.paso(
-  { x, y, ok: true },
-  (px, py) => zonaEn(px, py, MARCO2),
-  (id) => cajaZona(id, MARCO2));
+// La pausa después de alejar.
+fij = new Fijacion();
+fij.bloquear(MS_PAUSA_TRAS_ALEJAR, 0);
+res = correr(fij, () => [700, 400], MS_PAUSA_TRAS_ALEJAR + DWELL_ACERCAR_MS - 100);
+ok("recién alejado no vuelve a acercar enseguida", res === null,
+   JSON.stringify(res));
 
-const izq = cajaZona("z:1:0", MARCO2), der = cajaZona("z:1:2", MARCO2);
-const cIzq = [(izq.left + izq.right) / 2, (izq.top + izq.bottom) / 2];
-const cDer = [(der.left + der.right) / 2, (der.top + der.bottom) / 2];
+// Se alejó por tiempo: quedarse mirando el mismo lugar no puede volver a
+// acercar, o la persona siente que no hay salida.
+fij = new Fijacion();
+fij.exigirMovimiento([700, 400]);
+res = correr(fij, () => [720, 410], 6000);
+ok("tras alejarse solo, mirar el mismo lugar no vuelve a acercar",
+   res === null, JSON.stringify(res));
+res = correr(fij, (t) => (t < 500 ? [1200, 600] : [720, 410]), 4000,
+             { desde: 6000 });
+ok("irse y volver sí permite acercar ahí de nuevo", res !== null);
 
-const a = mirarA(cIzq[0], cIzq[1]);
-const b = mirarA(cDer[0], cDer[1]);
-ok("mirar a otra zona cambia el objetivo", a.objetivo !== b.objetivo,
-   `${a.objetivo} -> ${b.objetivo}`);
-ok("y la cuenta vuelve a empezar", b.avance < 0.05, String(b.avance));
+/* La cadena completa: señal cruda ruidosa -> filtro -> fijación. Es lo que
+ * corre de verdad; las pruebas de arriba le dan a la fijación una mirada ya
+ * limpia. */
+function cadena(dondeMira, ms, ruido) {
+  const filtro = new FiltroMirada(), f = new Fijacion();
+  for (let t = 0; t < ms; t += 33) {
+    const [x, y] = dondeMira(t);
+    const o = filtro.paso(x + ruido * gauss(), y + ruido * gauss(), t);
+    const r = f.paso({ x: o[0], y: o[1], ok: true }, dentro(o[0], o[1]), t);
+    if (r.disparo) return { t, en: r.disparo };
+  }
+  return null;
+}
+for (const ruido of [40, 80, 100]) {
+  let acercó = 0, tarde = 0, lejos = 0;
+  for (let k = 0; k < 20; k++) {
+    const r = cadena(() => [900, 450], 6000, ruido);
+    if (r) {
+      acercó += 1; tarde += r.t;
+      lejos = Math.max(lejos, Math.hypot(r.en[0] - 900, r.en[1] - 450));
+    }
+  }
+  console.log(`  ruido ${ruido}: acercó ${acercó}/20, a los ${(tarde / acercó).toFixed(0)} ms,`
+            + ` centro a ${lejos.toFixed(0)} px como mucho`);
+  ok(`con señal cruda de ruido ${ruido}, mirar fijo acerca siempre`,
+     acercó === 20, `${acercó}/20`);
+  // El centro no puede ser mejor que el ruido que queda después de filtrar:
+  // con señal cruda de 100 px eso son unos 30 px de desvío, y el peor de
+  // veinte intentos se va a unos 65.
+  ok(`y el centro queda cerca de lo mirado (ruido ${ruido})`,
+     lejos < (ruido <= 40 ? 40 : 80),
+     lejos.toFixed(0));
 
-/* El margen de pegado tiene que seguir aguantando el temblor: un desvío
- * chico dentro de la misma zona no puede reiniciar nada, o con 90 px de
- * error no se acercaría nunca. */
-const c = mirarA(cDer[0] + 60, cDer[1] + 30);
-ok("un temblor dentro de la zona NO reinicia", c.objetivo === b.objetivo,
-   `${b.objetivo} -> ${c.objetivo}`);
+  let falsas = 0;
+  for (let k = 0; k < 20; k++) {
+    if (cadena((t) => celdas[Math.floor(t / 600) % celdas.length], 12000, ruido)) {
+      falsas += 1;
+    }
+  }
+  console.log(`  ruido ${ruido}: leyendo 12 s seguidos, acercó sin querer ${falsas}/20`);
+  // Con señal limpia, nunca. Con señal muy ruidosa no se puede garantizar el
+  // cero -el filtro tarda en enterarse de un salto corto- y lo que se fija
+  // es que sea raro: menos de una vez cada minuto de lectura continua. Un
+  // acercamiento de más se deshace cerrando los ojos; uno que no llega
+  // nunca no tiene arreglo, y por eso el criterio no se aprieta más.
+  ok(`y leyendo el tablero no acerca (ruido ${ruido})`,
+     falsas <= (ruido <= 40 ? 0 : 4),
+     `${falsas}/20`);
+}
 
-/* Y mirar fuera del tablero -el panel del mensaje, de arriba- no acumula. */
-const d = mirarA(700, MARCO2.top - 40);
-ok("mirar fuera del tablero no acumula acercamiento",
-   d.objetivo === null && d.avance === 0, String(d.objetivo));
+/* ------------------------------------------------- el parpadeo largo */
 
-ok("nada de esto disparó todavía",
-   [a, b, c, d].every((r) => r.disparo === null));
+/* Abierto 0.45 y cerrado 0.17: el cerrado queda POR ENCIMA del umbral fijo de
+ * 0.14 que usa el resto del sistema. Es el caso que un umbral fijo no ve
+ * nunca, y por eso el detector se mide contra la apertura de cada persona. */
+function parpadear(ms, { hayCara = true, abierto = 0.45, cerrado = 0.17 } = {}) {
+  const p = new ParpadeoLargo();
+  let avisos = 0;
+  for (let t = 0; t < 900; t += 33) avisos += p.paso(abierto, true, t) ? 1 : 0;
+  for (let t = 900; t < 900 + ms; t += 33) avisos += p.paso(cerrado, hayCara, t) ? 1 : 0;
+  for (let t = 900 + ms; t < 1500 + ms; t += 33) avisos += p.paso(abierto, true, t) ? 1 : 0;
+  return avisos;
+}
+ok("un parpadeo espontáneo de 150 ms no cancela nada", parpadear(150) === 0);
+ok("uno de 300 ms tampoco", parpadear(300) === 0);
+ok(`cerrar los ojos más de ${MS_PARPADEO_LARGO} ms cancela`,
+   parpadear(MS_PARPADEO_LARGO + 120) === 1);
+ok("y avisa UNA sola vez aunque se sigan cerrados", parpadear(2500) === 1);
+ok("perder la cara no es parpadear", parpadear(2500, { hayCara: false }) === 0);
+ok("funciona igual con ojos de apertura chica",
+   parpadear(700, { abierto: 0.26, cerrado: 0.10 }) === 1);
+ok("entrecerrar apenas los ojos no cancela",
+   parpadear(2500, { abierto: 0.45, cerrado: 0.36 }) === 0);
+{
+  // Muchos parpadeos seguidos no pueden ir bajando la referencia.
+  const p = new ParpadeoLargo();
+  let t = 0;
+  for (let k = 0; k < 40; k++) {
+    for (let i = 0; i < 20; i++) { p.paso(0.45, true, t); t += 33; }
+    for (let i = 0; i < 6; i++) { p.paso(0.12, true, t); t += 33; }
+  }
+  ok("parpadear seguido no baja la apertura aprendida", p.base > 0.42,
+     p.base.toFixed(3));
+}
+
+ok("acercar pide una fijación de al menos 1 s", DWELL_ACERCAR_MS >= 1000,
+   String(DWELL_ACERCAR_MS));
+ok("y al entrar al tablero hay una pausa para orientarse", MS_ORIENTARSE > 0);
 
 console.log(fallos.length ? `\n${fallos.length} FALLAS` : "\nTodo OK");
 process.exit(fallos.length ? 1 : 0);

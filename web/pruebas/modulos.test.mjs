@@ -21,8 +21,7 @@ ok("rasgos: tolera landmarks faltantes sin reventar",
    rasgos.extraer(null) === null && rasgos.extraer([]) === null);
 
 ok("modelo: exporta ModeloMirada", typeof modelo.ModeloMirada === "function");
-ok("suavizado: exporta Suavizador y VentanaMediana",
-   typeof suav.Suavizador === "function" && typeof suav.VentanaMediana === "function");
+ok("suavizado: exporta FiltroMirada", typeof suav.FiltroMirada === "function");
 ok("permanencia: 1200 ms y 600 de refractario",
    perm.DWELL_MS === 1200 && perm.REFRACTARIO_MS === 600);
 
@@ -57,17 +56,13 @@ ok("prompt: viene de prompts.py y pide JSON",
    && prompt.PROMPT_SISTEMA.includes("ELA")
    && prompt.construirUsuario("AGUA") === "entrada: AGUA");
 
-// El suavizador no debe devolver NaN ante una medición rota.
-const s = new suav.Suavizador();
-s.paso(100, 200, 0.03);
-const [nx] = s.paso(NaN, NaN, 0.03);
-ok("suavizado: una medición NaN no envenena el estado", Number.isFinite(nx), nx);
-
-const v = new suav.VentanaMediana(300);
-v.empujar(0, 0, 0); v.empujar(100, 100, 100); v.empujar(50, 50, 200);
-ok("ventana: mediana, no media", v.mediana()[0] === 50, v.mediana());
-v.empujar(10, 10, 900);
-ok("ventana: descarta por tiempo", v.buf.length === 1, v.buf.length);
+// El filtro tiene su propia prueba, suavizado.test.mjs. Acá solo se
+// comprueba que una medición rota no envenene el estado.
+const filtro = new suav.FiltroMirada();
+filtro.paso(100, 200, 0);
+const tras = filtro.paso(NaN, NaN, 30);
+ok("suavizado: una medición NaN no envenena el estado",
+   Number.isFinite(tras[0]) && Number.isFinite(tras[1]), String(tras));
 
 console.log(fallos.length ? `\n${fallos.length} FALLAS` : "\nTodo OK");
 process.exit(fallos.length ? 1 : 0);
