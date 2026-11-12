@@ -25,8 +25,8 @@
 import { readFileSync } from "node:fs";
 import { recorridoDe } from "../js/modelo.js";
 import { FalloEstimador } from "../js/estimador.js";
-import { EstimadorWebGazer } from "../js/webgazer_est.js";
-import { elegirCresta } from "../js/cresta.js";
+import { EstimadorWebGazer, PUNTOS_16 } from "../js/webgazer_est.js";
+import { elegirCresta, ajustarCrudo, predecirCentrado } from "../js/cresta.js";
 
 const fallos = [];
 const ok = (n, c, x = "") =>
@@ -232,6 +232,157 @@ ok("una predicción constante da recorrido cero",
    recorridoDe(REJILLA.map(() => [700, 300]), REJILLA) === 0);
 ok("con menos de dos puntos no inventa un número",
    Number.isNaN(recorridoDe([[1, 1]], [[1, 1]])));
+
+/* ------------------------------ la regresión propia sobre WebGazer
+ *
+ * Medido sin el artefacto del filtro, WebGazer erró 105 px, y elegirle la
+ * cresta no cambió nada (109 px validados con la de fábrica, 109 con la
+ * mejor). Lo que se prueba acá es el reemplazo: los rasgos siguen siendo los
+ * de WebGazer, pero el ajuste es propio -con intercepto, dieciséis lugares y
+ * sin tope de muestras-.
+ *
+ * Los parches se simulan como en `cresta.test.mjs`: dependen de la mirada,
+ * pero sobre todo de la pose y la luz, que son las mismas dentro de un punto.
+ * Y tienen un brillo medio de 128 que no dice nada de la mirada: es lo que un
+ * ajuste sin intercepto tiene que explicar con los mismos coeficientes.
+ */
+{
+  let sem = 99991;
+  const azar = () => (sem = (sem * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const liso = (f) => Array.from({ length: 120 },
+    (_, i) => Math.sin(i * f) + 0.5 * Math.cos(i * f * 0.37));
+  const base = liso(0.11), dX = liso(0.05), dY = liso(0.08);
+  const estorbos = [liso(0.023), liso(0.041), liso(0.067), liso(0.095)];
+
+  /** Un "ojo" mirando a (x, y), con la pose de ese momento. */
+  const ojo = ([x, y], pose) => {
+    const f = new Array(120);
+    for (let i = 0; i < 120; i++) {
+      let v = 128 + 40 * base[i] + 30 * dX[i] * (x / W - 0.5)
+            + 30 * dY[i] * (y / H - 0.5) + 6 * (azar() - 0.5);
+      for (let e = 0; e < 4; e++) v += pose[e] * estorbos[e][i];
+      f[i] = Math.max(0, Math.min(255, v));
+    }
+    return { f };
+  };
+  const poseNueva = () => estorbos.map(() => 10 * (azar() - 0.5));
+
+  /** Un WebGazer de mentira con lo que el estimador usa de verdad. */
+  function webgazerFalso() {
+    const reg = {
+      eyeFeaturesClicks: { data: [], length: 0 },
+      addData() { this.llamadasViejas = (this.llamadasViejas || 0) + 1; },
+      predict() { return { x: -1, y: -1 }; },
+    };
+    const wg = {
+      ojoActual: null,
+      util: { getEyeFeats: (eyes) => eyes.f },
+      getRegression: () => [reg],
+      recordScreenPosition(x, y, tipo) { reg.addData(wg.ojoActual, [x, y], tipo); },
+      clearData: async () => {},
+    };
+    return { wg, reg };
+  }
+
+  const { wg, reg } = webgazerFalso();
+  const e = new EstimadorWebGazer();
+  e.wg = wg;
+  ok("toma la regresión cuando WebGazer expone sus rasgos",
+     e._tomarRegresion() === true && e._propia === true);
+  ok("y pasa a calibrar en dieciséis lugares", e.puntos === PUNTOS_16
+     && PUNTOS_16.length === 16);
+  ok("los dieciséis son distintos entre sí",
+     new Set(PUNTOS_16.map((p) => p.join())).size === 16);
+  const prueba9 = [0.25, 0.5, 0.75].flatMap(
+    (fx) => [0.2, 0.5, 0.8].map((fy) => [fx, fy].join()));
+  ok("y ninguno coincide con los de la prueba de precisión",
+     PUNTOS_16.every((p) => !prueba9.includes(p.join())));
+  const salto = Math.max(...PUNTOS_16.slice(1).map((p, i) =>
+    Math.hypot(p[0] - PUNTOS_16[i][0], p[1] - PUNTOS_16[i][1])));
+  ok("la serpentina no tiene saltos largos", salto < 0.3, salto.toFixed(2));
+  ok("el cupo por punto entra en la ventana de grabado",
+     1 + Math.floor(MS_GRABAR / e.msEntreMuestras) >= e.muestrasPorPunto,
+     `${e.muestrasPorPunto} cada ${e.msEntreMuestras} ms`);
+
+  ok("antes de calibrar no predice nada", reg.predict({ f: ojo([1, 1], [0, 0, 0, 0]).f }) === null);
+
+  // Sin ojos todavía: no puede confirmar la muestra.
+  wg.ojoActual = null;
+  ok("sin rasgos de ojo, grabar devuelve false",
+     e.grabar(null, [100, 100], 0) === false && e._grupos.length === 0);
+
+  // La calibración completa.
+  let grabadas = 0;
+  PUNTOS_16.forEach(([fx, fy], g) => {
+    const objetivo = [fx * W, fy * H], pose = poseNueva();
+    for (let k = 0; k < e.muestrasPorPunto; k++) {
+      wg.ojoActual = ojo(objetivo, pose);
+      if (e.grabar(null, objetivo, g)) grabadas += 1;
+    }
+  });
+  ok("graba todas, sin el tope de 50 de WebGazer", grabadas === 192
+     && e._X.length === 192, String(grabadas));
+
+  const d = await e.ajustar();
+  console.log(`  ${d.nota}`);
+  ok("el diagnóstico trae el error validado y el recorrido",
+     Number.isFinite(d.errorCV) && d.recorrido > 0.6, JSON.stringify(d));
+  ok("y dice que la regresión es la propia", /regresión propia/.test(d.nota));
+
+  // Lo que importa: lugares que NO se calibraron, con poses nuevas.
+  const noVistos = [0.25, 0.5, 0.75].flatMap(
+    (fx) => [0.2, 0.5, 0.8].map((fy) => [fx * W, fy * H]));
+  const errorDe = (predecir) => {
+    let s = 0, n = 0;
+    for (let rep = 0; rep < 6; rep++) {
+      for (const t of noVistos) {
+        const p = predecir(ojo(t, poseNueva()));
+        s += Math.hypot(p[0] - t[0], p[1] - t[1]); n += 1;
+      }
+    }
+    return s / n;
+  };
+  const errPropia = errorDe((o) => { const q = reg.predict(o); return [q.x, q.y]; });
+
+  // Contra lo que hacía WebGazer: nueve lugares, cinco muestras, sin
+  // intercepto y con la cresta de fábrica.
+  const X9 = [], yx9 = [], yy9 = [];
+  for (const t of REJILLA) {
+    const pose = poseNueva();
+    for (let k = 0; k < 5; k++) { X9.push(ojo(t, pose).f); yx9.push(t[0]); yy9.push(t[1]); }
+  }
+  const fabrica = ajustarCrudo(X9, yx9, yy9, 1e-5);
+  const errFabrica = errorDe((o) => predecirCentrado(fabrica, o.f));
+  console.log(`  en lugares no vistos:  de fábrica ${errFabrica.toFixed(0)} px`
+            + `   propia ${errPropia.toFixed(0)} px`);
+  // En esta simulación la ventaja es moderada -del orden del 10 al 15%-
+  // porque lo que domina es la pose de cada punto, que ningún ajuste puede
+  // adivinar. No se le exige más que eso: cuánto gana de verdad lo dice la
+  // medición en la máquina, no este número.
+  ok("la regresión propia erra menos donde no se calibró",
+     errPropia < errFabrica * 0.95,
+     `${errPropia.toFixed(0)} vs ${errFabrica.toFixed(0)}`);
+
+  // Recalibrar empieza de cero y conserva los reemplazos.
+  await e.limpiarDatos();
+  ok("limpiar borra el modelo y las muestras",
+     e._X.length === 0 && e._modelo === null && reg.predict(ojo([5, 5], [0, 0, 0, 0])) === null);
+  wg.ojoActual = ojo([300, 300], poseNueva());
+  ok("y después de limpiar se sigue grabando por la vía propia",
+     e.grabar(null, [300, 300], 0) === true && !reg.llamadasViejas);
+
+  // Calibración pobre: avisa.
+  let aviso = null;
+  try { await e.ajustar(); } catch (err) { aviso = err; }
+  ok("con una sola muestra avisa en vez de ajustar", aviso instanceof FalloEstimador);
+
+  // Si WebGazer no expone la función de rasgos, no se toca nada.
+  const viejo = new EstimadorWebGazer();
+  viejo.wg = { getRegression: () => [{}], util: {} };
+  ok("sin la función de rasgos queda todo como de fábrica",
+     viejo._tomarRegresion() === false && viejo._propia === false
+     && viejo.puntos === null && viejo.muestrasPorPunto === 5);
+}
 
 console.log(fallos.length ? `\n${fallos.length} FALLAS` : "\nTodo OK");
 process.exit(fallos.length ? 1 : 0);

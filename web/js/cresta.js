@@ -187,3 +187,152 @@ export function elegirCresta(X, yx, yy, grupos, relativos = RELATIVOS) {
     mejoraSobre: sinNada ? sinNada.error : NaN,
   };
 }
+
+/* ------------------------------------------------------------------------
+ * Regresión con INTERCEPTO, para cuando el ajuste lo hace este proyecto y no
+ * WebGazer.
+ *
+ * ## Por qué existe
+ *
+ * La validación de arriba se probó con datos reales y no encontró nada: con
+ * 45 muestras el error validado fue de 109 px con la cresta de fábrica y de
+ * 109 px con la mejor. No había nada que elegir, porque el problema no era el
+ * valor de la cresta sino la forma del ajuste:
+ *
+ * - **sin intercepto**: la predicción es una suma de rasgos por coeficientes
+ *   y nada más, así que el brillo medio del parche -que no dice nada de la
+ *   mirada- tiene que explicarse con los mismos coeficientes;
+ * - **nueve lugares**: el desvío medido cambia de +98 px a -155 px entre dos
+ *   puntos vecinos de la misma fila. El modelo pasa por los nueve y entre
+ *   medio no tiene con qué orientarse;
+ * - **45 muestras como máximo**, por la ventana de WebGazer.
+ *
+ * Centrar los rasgos y los objetivos antes de ajustar es lo mismo que agregar
+ * el intercepto, y deja a la cresta castigando solo lo que varía.
+ */
+
+/* Con los rasgos centrados la diagonal ya no carga con el brillo medio, así
+ * que la cresta útil es, en proporción, bastante mayor que sin centrar. */
+export const RELATIVOS_CENTRADO =
+  [1e-6, 1e-4, 1e-3, 3e-3, 0.01, 0.03, 0.1, 0.3, 1, 3];
+
+function centrar(X, yx, yy, filas) {
+  const d = X[0].length, n = filas.length;
+  const media = new Float64Array(d);
+  let mx = 0, my = 0;
+  for (const k of filas) {
+    const x = X[k];
+    for (let i = 0; i < d; i++) media[i] += x[i];
+    mx += yx[k]; my += yy[k];
+  }
+  for (let i = 0; i < d; i++) media[i] /= n;
+  mx /= n; my /= n;
+  const Xc = filas.map((k) => {
+    const x = X[k], f = new Float64Array(d);
+    for (let i = 0; i < d; i++) f[i] = x[i] - media[i];
+    return f;
+  });
+  return { Xc, yxc: filas.map((k) => yx[k] - mx),
+           yyc: filas.map((k) => yy[k] - my), media, mx, my };
+}
+
+function resolverCentrado(c, d, cresta, A0, M, B) {
+  M.set(A0.A);
+  for (let i = 0; i < d; i++) M[i * d + i] += cresta;
+  for (let i = 0; i < d; i++) { B[i * 2] = A0.bx[i]; B[i * 2 + 1] = A0.by[i]; }
+  if (!resolver(M, d, B, 2)) return null;
+  const cx = new Float64Array(d), cy = new Float64Array(d);
+  for (let i = 0; i < d; i++) { cx[i] = B[i * 2]; cy[i] = B[i * 2 + 1]; }
+  return { cx, cy, media: c.media, mx: c.mx, my: c.my };
+}
+
+/** Ajusta el modelo con intercepto sobre las filas dadas (todas, si no se
+ *  dicen). Devuelve lo que necesita `predecirCentrado`, o null. */
+export function ajustarCentrado(X, yx, yy, cresta, filas = null) {
+  if (!X.length) return null;
+  const todas = filas ?? X.map((_, i) => i);
+  const d = X[0].length;
+  const c = centrar(X, yx, yy, todas);
+  const A0 = normales(c.Xc, c.yxc, c.yyc, d, () => true);
+  return resolverCentrado(c, d, cresta, A0,
+    new Float64Array(d * d), new Float64Array(d * 2));
+}
+
+/** @returns {[number, number]} la posición en pantalla para unos rasgos */
+export function predecirCentrado(m, f) {
+  let x = m.mx, y = m.my;
+  for (let i = 0; i < m.cx.length; i++) {
+    const v = f[i] - m.media[i];
+    x += v * m.cx[i]; y += v * m.cy[i];
+  }
+  return [x, y];
+}
+
+/** Lo que hace WebGazer de fábrica: sin intercepto y con la cresta que se le
+ *  pase. Está para poder comparar contra eso, no para usarlo. */
+export function ajustarCrudo(X, yx, yy, cresta) {
+  if (!X.length) return null;
+  const d = X[0].length;
+  const A0 = normales(X, yx, yy, d, () => true);
+  const c = { media: new Float64Array(d), mx: 0, my: 0 };
+  return resolverCentrado(c, d, cresta, A0,
+    new Float64Array(d * d), new Float64Array(d * 2));
+}
+
+/**
+ * La cresta que menos error deja en un punto que el modelo no vio, con
+ * intercepto. El centrado se recalcula en cada vuelta con las filas que
+ * quedaron adentro: usar la media de todas dejaría que el punto que se saca
+ * influya en el modelo que lo va a predecir.
+ *
+ * @returns {{cresta:number, relativo:number, error:number, base:number,
+ *            enBorde:boolean,
+ *            tabla:Array<{relativo:number, cresta:number, error:number}>}|null}
+ */
+export function elegirCrestaCentrada(X, yx, yy, grupos,
+                                     relativos = RELATIVOS_CENTRADO) {
+  const n = X.length;
+  if (!n || yx.length !== n || yy.length !== n || grupos.length !== n) return null;
+  const puntos = [...new Set(grupos)];
+  if (puntos.length < 3) return null;
+  const d = X[0].length;
+
+  const todo = centrar(X, yx, yy, X.map((_, i) => i));
+  const At = normales(todo.Xc, todo.yxc, todo.yyc, d, () => true);
+  let traza = 0;
+  for (let i = 0; i < d; i++) traza += At.A[i * d + i];
+  const base = traza / d;
+  if (!(base > 0)) return null;
+
+  const errores = relativos.map(() => ({ suma: 0, n: 0 }));
+  const M = new Float64Array(d * d), B = new Float64Array(d * 2);
+
+  for (const g of puntos) {
+    const adentro = [], afuera = [];
+    for (let k = 0; k < n; k++) (grupos[k] === g ? afuera : adentro).push(k);
+    if (!afuera.length || !adentro.length) continue;
+    const c = centrar(X, yx, yy, adentro);
+    const A0 = normales(c.Xc, c.yxc, c.yyc, d, () => true);
+    for (let r = 0; r < relativos.length; r++) {
+      const m = resolverCentrado(c, d, relativos[r] * base, A0, M, B);
+      if (!m) { errores[r].suma = Infinity; errores[r].n = 1; continue; }
+      for (const k of afuera) {
+        const [px, py] = predecirCentrado(m, X[k]);
+        errores[r].suma += Math.hypot(px - yx[k], py - yy[k]);
+        errores[r].n += 1;
+      }
+    }
+  }
+
+  const tabla = relativos.map((r, i) => ({
+    relativo: r, cresta: r * base,
+    error: errores[i].n ? errores[i].suma / errores[i].n : NaN,
+  })).filter((f) => Number.isFinite(f.error));
+  if (!tabla.length) return null;
+  const mejor = tabla.reduce((a, b) => (b.error < a.error ? b : a));
+  return {
+    cresta: mejor.cresta, relativo: mejor.relativo, error: mejor.error,
+    base, tabla,
+    enBorde: mejor === tabla[0] || mejor === tabla[tabla.length - 1],
+  };
+}

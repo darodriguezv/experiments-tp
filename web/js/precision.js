@@ -307,12 +307,22 @@ export function informe(prueba) {
     L.push(`curvatura      x ${cv.x.toFixed(0)} px   y ${cv.y.toFixed(0)} px`
          + `   (cuánto se aparta de una recta)`);
     const torcida = Math.abs(af.ex.a - 1) > 0.15 || Math.abs(af.ey.a - 1) > 0.15;
+    /* Lo que queda después de restar el corrimiento promedio. Una medición
+     * real dio un promedio de (-61, -53) px con desvíos por punto que iban de
+     * +98 a -155 px en la misma fila, y el informe la llamó "uniforme" porque
+     * solo miraba el tamaño del promedio. Uniforme es que restarlo alcance. */
+    const resto = r.por_punto.reduce((a, p) =>
+      a + Math.hypot(p.dx - mdx, p.dy - mdy), 0) / r.por_punto.length;
     L.push(torcida
       ? "La GANANCIA está mal: el desvío crece con la coordenada. Restar una "
         + "constante no alcanza, hace falta corregir la escala."
       : Math.hypot(mdx, mdy) > 0.6 * r.sesgo
-        ? "Corrimiento UNIFORME: los nueve están corridos igual, y una "
-          + "constante lo arregla."
+        ? (resto < 0.4 * r.sesgo
+          ? "Corrimiento UNIFORME: los nueve están corridos igual, y una "
+            + "constante lo arregla."
+          : `Hay un corrimiento común, pero quitarlo deja ${resto.toFixed(0)} px: `
+            + "el resto cambia de un punto al de al lado y ninguna corrección "
+            + "simple lo arregla.")
         : "Ni corrimiento parejo ni ganancia torcida: el error cambia según "
           + "la zona, sin una regla simple.");
     /* Si el desvío se dobla, agregarle parámetros a la corrección lineal

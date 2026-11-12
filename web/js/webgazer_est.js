@@ -77,7 +77,17 @@
 
 import { FalloEstimador } from "./estimador.js";
 import { recorridoDe } from "./modelo.js";
-import { elegirCresta } from "./cresta.js";
+import { elegirCresta, elegirCrestaCentrada, ajustarCentrado,
+         predecirCentrado } from "./cresta.js";
+
+/* Dieciséis lugares en vez de nueve, en serpentina para que cada salto sea
+ * corto. Con nueve, el modelo no tenía con qué orientarse entre punto y
+ * punto: el desvío medido cambiaba de signo entre vecinos. No coinciden con
+ * los de la prueba de precisión (0.25/0.5/0.75) ni con los de la corrección
+ * (0.2/0.5/0.8), así que la prueba sigue midiendo lugares no vistos. */
+const F4 = [0.1, 0.37, 0.63, 0.9];
+export const PUNTOS_16 = F4.flatMap((fy, fila) =>
+  (fila % 2 ? [...F4].reverse() : F4).map((fx) => [fx, fy]));
 
 const WG = "https://cdn.jsdelivr.net/npm/webgazer@3.5.3";
 
@@ -99,6 +109,12 @@ export class EstimadorWebGazer {
     this.nPuntosCara = 0;
     this._ultima = null;            // última predicción del escucha
     this._grupos = [];              // a qué punto corresponde cada muestra
+    // Regresión propia: ver `_tomarRegresion`. Hasta que no se confirme que
+    // WebGazer expone lo necesario, todo queda como de fábrica.
+    this._propia = false;
+    this.puntos = null;             // null = los nueve de siempre
+    this._X = []; this._yx = []; this._yy = [];
+    this._modelo = null;
   }
 
   async iniciar() {
@@ -157,6 +173,8 @@ export class EstimadorWebGazer {
     // pantalla, porque un <video> sin caja deja de entregar cuadros.
     wg.showPredictionPoints(false);
 
+    this._tomarRegresion();
+
     wg.setGazeListener((d) => {
       if (d && Number.isFinite(d.x) && Number.isFinite(d.y)) {
         this._ultima = [d.x, d.y];
@@ -209,6 +227,13 @@ export class EstimadorWebGazer {
   grabar(_datos, objetivo, grupo) {
     const reg = this.wg?.getRegression?.()?.[0];
     if (!reg) return false;
+    if (this._propia) {
+      const n = this._X.length;
+      this.wg.recordScreenPosition(objetivo[0], objetivo[1], "click");
+      if (this._X.length <= n) return false;
+      this._grupos.push(grupo);
+      return true;
+    }
     const antes = reg.eyeFeaturesClicks.length;
     this.wg.recordScreenPosition(objetivo[0], objetivo[1], "click");
     const grabo = reg.eyeFeaturesClicks.length > antes;
@@ -219,7 +244,13 @@ export class EstimadorWebGazer {
   async limpiarDatos() {
     this._grupos = [];
     this._ultima = null;
+    this._X = []; this._yx = []; this._yy = [];
+    this._modelo = null;
     try { await this.wg?.clearData?.(); } catch (_) {}
+    // `clearData` reinicia el regresor. Si al hacerlo lo cambiara por otro
+    // objeto, los reemplazos se perderían en silencio y la calibración
+    // siguiente no grabaría nada: se vuelven a poner siempre.
+    if (this._propia) this._tomarRegresion();
   }
 
   /** WebGazer entrena en línea: no hay nada que ajustar al cerrar.
@@ -234,6 +265,7 @@ export class EstimadorWebGazer {
    * cada `predict()`- pero es una sola vez y son 9.
    */
   async ajustar() {
+    if (this._propia) return this._ajustarPropia();
     const reg = this.wg?.getRegression?.()?.[0];
     const guardadas = reg?.dataClicks?.data ?? [];
     if (guardadas.length < 18) {
@@ -294,6 +326,117 @@ export class EstimadorWebGazer {
           + `sin regularizar, como viene de fábrica, ${cv.mejoraSobre.toFixed(0)} px)`
         : `${guardadas.length} muestras, cresta ${deFabrica} de fábrica `
           + `(no se pudo validar)`,
+    };
+  }
+
+  /** Reemplaza la regresión de WebGazer por la de este proyecto, y se queda
+   *  con lo que WebGazer hace bien: seguir la cara y recortar los ojos.
+   *
+   * ## Por qué
+   *
+   * Medido sin el artefacto del filtro, WebGazer erra 105 px y el error no es
+   * parejo: en una misma fila pasa de +98 px a -155 px entre puntos vecinos.
+   * Su regresión tiene tres límites que desde afuera no se pueden mover:
+   * guarda 50 muestras como máximo, no tiene intercepto, y se reajusta entera
+   * en cada cuadro. Elegirle la cresta por validación cruzada no cambió nada
+   * (109 px contra 109 px): con 45 muestras en nueve lugares no hay de dónde.
+   *
+   * ## Cómo
+   *
+   * El lazo de WebGazer llama a `addData` para entrenar y a `predict` para
+   * predecir, sobre este mismo objeto. Se reemplazan las dos:
+   *
+   * - `addData` guarda los rasgos -los mismos 120 valores que usa WebGazer,
+   *   calculados con su propia función- en arreglos sin tope;
+   * - `predict` aplica un modelo ya ajustado: un producto y una suma por
+   *   cuadro, en vez de resolver un sistema de 120x120 cada vez.
+   *
+   * Si WebGazer no expone lo necesario, no se toca nada y queda su regresión
+   * con sus 45 muestras: `this._propia` dice cuál de las dos corre, y el
+   * informe lo muestra.
+   *
+   * @returns {boolean} si quedó la regresión propia
+   */
+  _tomarRegresion() {
+    const reg = this.wg?.getRegression?.()?.[0];
+    const util = this.wg?.util;
+    if (!reg || typeof util?.getEyeFeats !== "function") return false;
+
+    const rasgosDe = (eyes) => {
+      try {
+        const f = util.getEyeFeats(eyes);
+        return f && f.length ? f : null;
+      } catch (_) { return null; }
+    };
+    reg.addData = (eyes, pos, tipo) => {
+      if (!eyes || tipo !== "click") return;
+      const f = rasgosDe(eyes);
+      if (!f) return;
+      this._X.push(Float64Array.from(f));
+      this._yx.push(pos[0]);
+      this._yy.push(pos[1]);
+    };
+    reg.predict = (eyes) => {
+      const m = this._modelo;
+      if (!eyes || !m) return null;
+      const f = rasgosDe(eyes);
+      if (!f || f.length !== m.cx.length) return null;
+      const [x, y] = predecirCentrado(m, f);
+      return { x, y };
+    };
+
+    this._propia = true;
+    this.puntos = PUNTOS_16;
+    this.muestrasPorPunto = 12;
+    this.msEntreMuestras = 110;
+    this.etiqueta = "WebGazer.js 3.5.3 (parches de ojo) + regresión propia";
+    return true;
+  }
+
+  /** Cierra la calibración cuando la regresión es la propia. */
+  async _ajustarPropia() {
+    const n = this._X.length;
+    const lugares = new Set(this._grupos).size;
+    if (n !== this._grupos.length || lugares < 6 || n < lugares * 3) {
+      throw new FalloEstimador(
+        "La calibración no juntó suficientes muestras.",
+        `Quedaron ${n} muestras en ${lugares} puntos de `
+        + `${this.puntos.length}. Suele ser falta de luz o la cara fuera de `
+        + `cuadro.`);
+    }
+    await new Promise((r) => setTimeout(r, 0));   // que pinte el cuadro
+
+    const cv = elegirCrestaCentrada(this._X, this._yx, this._yy, this._grupos);
+    const modelo = cv
+      ? ajustarCentrado(this._X, this._yx, this._yy, cv.cresta) : null;
+    if (!modelo) {
+      throw new FalloEstimador(
+        "No se pudo ajustar el modelo de mirada.",
+        "La regresión no encontró solución con las muestras grabadas.");
+    }
+    this._modelo = modelo;
+    console.log("[cresta]", cv.tabla.map((f) =>
+      `${f.relativo}: ${f.error.toFixed(0)} px`).join("  "));
+
+    // El mismo diagnóstico de colapso que el otro estimador: cuánto se mueven
+    // las predicciones contra cuánto se mueven los objetivos.
+    const pred = [], obj = [];
+    const vistos = new Set();
+    for (let i = 0; i < n; i++) {
+      const g = this._grupos[i];
+      if (vistos.has(g)) continue;
+      vistos.add(g);
+      pred.push(predecirCentrado(modelo, this._X[i]));
+      obj.push([this._yx[i], this._yy[i]]);
+    }
+    return {
+      recorrido: recorridoDe(pred, obj),
+      errorCV: cv.error,
+      alfa: cv.cresta,
+      nota: `${n} muestras en ${lugares} puntos, regresión propia con `
+          + `intercepto, cresta relativa ${cv.relativo} elegida dejando un `
+          + `punto afuera (error ${cv.error.toFixed(0)} px en puntos no vistos)`
+          + (cv.enBorde ? "; el óptimo cayó en el borde de la escalera" : ""),
     };
   }
 

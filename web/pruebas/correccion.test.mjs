@@ -170,5 +170,28 @@ ok("un desvío perfectamente lineal da curvatura cero",
    cvRecto.x < 1e-6 && cvRecto.y < 1e-6, cvRecto.x + ", " + cvRecto.y);
 ok("y ahí el informe NO habla de curva", !/una curva/.test(informe(recto)));
 
+/* ------------------- la tercera medición: la primera sin el filtro viejo
+ *
+ * Con el filtro que no se pasa de largo, la ganancia quedó en 0.92 y 1.02:
+ * el problema de ganancia de las dos sesiones anteriores era, en buena parte,
+ * el filtro. Lo que queda es otra cosa: un error que cambia de un punto al
+ * vecino (de +98 a -155 px en la fila de arriba). El informe lo llamaba
+ * "uniforme" porque el promedio era grande. */
+const MEDIDO3 = [
+  [384, 147, -39, 98], [768, 147, -41, -70], [1152, 147, -24, -155],
+  [384, 368, -8, 7], [768, 368, -123, -105], [1152, 368, -100, -154],
+  [384, 588, -10, -16], [768, 588, -96, 0], [1152, 588, -110, -85],
+];
+const tercera = pruebaCon(MEDIDO3, 11);
+const af3 = ajusteAfin(tercera);
+ok("sin el filtro viejo la ganancia medida queda cerca de 1",
+   Math.abs(af3.ex.a - 1) < 0.15 && Math.abs(af3.ey.a - 1) < 0.15,
+   `${af3.ex.a.toFixed(2)} / ${af3.ey.a.toFixed(2)}`);
+ok("y el informe ya NO la llama uniforme",
+   !/Corrimiento UNIFORME/.test(informe(tercera)),
+   informe(tercera).split("\n").slice(-2).join(" | "));
+ok("dice que el error cambia de un punto al de al lado",
+   /cambia de un punto al de al lado/.test(informe(tercera)));
+
 console.log(fallos.length ? `\n${fallos.length} FALLAS` : "\nTodo OK");
 process.exit(fallos.length ? 1 : 0);

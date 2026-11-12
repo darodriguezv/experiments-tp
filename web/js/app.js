@@ -440,12 +440,16 @@ async function empezarCalibracion() {
   pintarPuntoCalib();
 }
 
+/** Dónde se calibra lo decide el estimador: el de WebGazer con regresión
+ *  propia usa dieciséis lugares; los demás, los nueve de siempre. */
+function puntosCalib() { return est.mirada?.puntos ?? PUNTOS; }
+
 function pintarPuntoCalib() {
-  const [fx, fy] = PUNTOS[est.calib.i];
+  const [fx, fy] = puntosCalib()[est.calib.i];
   const p = $("#punto");
   p.style.left = (fx * 100) + "%";
   p.style.top = (fy * 100) + "%";
-  $("#calib-n").textContent = `${est.calib.i + 1} / ${PUNTOS.length}`;
+  $("#calib-n").textContent = `${est.calib.i + 1} / ${puntosCalib().length}`;
 }
 
 function pasoCalibracion(datos, t) {
@@ -475,7 +479,7 @@ function pasoCalibracion(datos, t) {
   const espaciado = est.mirada.msEntreMuestras;
   if (datos && datos.ear > UMBRAL_PARPADEO && c.n < cupo
       && t - c.ultima >= espaciado) {
-    const [fx, fy] = PUNTOS[c.i];
+    const [fx, fy] = puntosCalib()[c.i];
     const objetivo = [fx * window.innerWidth, fy * window.innerHeight];
     if (est.mirada.grabar(datos, objetivo, c.i)) { c.n += 1; c.ultima = t; }
   }
@@ -484,7 +488,7 @@ function pasoCalibracion(datos, t) {
     c.grabadas = (c.grabadas || 0) + c.n;
     c.n = 0; c.ultima = 0;
     c.i += 1;
-    if (c.i >= PUNTOS.length) return terminarCalibracion();
+    if (c.i >= puntosCalib().length) return terminarCalibracion();
     c.fase = "asentar"; c.desde = t;
     pintarPuntoCalib();
   }
