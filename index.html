@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tablero CAA por mirada</title>
+<meta name="description" content="Dispositivo de comunicación aumentativa controlado por la mirada. Todo corre en tu máquina: la cámara y lo que escribís nunca salen.">
+<link rel="stylesheet" href="css/estilo.css">
+</head>
+<body>
+
+<!-- El elemento que MediaPipe lee. Conserva su tamaño natural: encogerlo le
+     entrega una imagen diminuta al detector y los landmarks dejan de
+     significar nada. Se oculta por opacidad, no por dimensiones. -->
+<video id="video" playsinline muted autoplay></video>
+
+<!-- -------------------------------------------------------------- menú -->
+<section id="p-menu" class="pantalla centrada" hidden>
+  <div class="caja">
+    <h1>Tablero de comunicación por mirada</h1>
+    <p class="guia-texto">
+      Seleccione qué desea hacer. Todas las opciones requieren calibrar la
+      mirada al comenzar.
+    </p>
+
+    <div class="opciones" id="opciones"></div>
+
+    <!-- El estimador de mirada es, ahora mismo, la variable bajo medición:
+         por eso está acá y no escondido. Cambiarlo recarga la página. -->
+    <div class="bloque-est">
+      <h3 class="sub">Estimador de mirada</h3>
+      <p class="chico tenue">Determina cómo se convierte la imagen de la cámara
+        en un punto de la pantalla. Cambiarlo reinicia la página y obliga a
+        calibrar de nuevo.</p>
+      <div class="estimadores" id="estimadores"></div>
+    </div>
+
+    <div class="privacidad">
+      <strong>Todo se procesa en este equipo.</strong>
+      El video se analiza cuadro a cuadro en el navegador y se descarta: no se
+      transmite, no se almacena y no sale de esta máquina. El texto compuesto
+      tampoco.
+      <span id="webgpu" class="chico"></span>
+    </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- el caso -->
+<section id="p-caso" class="pantalla centrada" hidden>
+  <div class="caja">
+    <h2 id="caso-titulo">Su papel en esta prueba</h2>
+    <p class="tenue chico">Léalo con calma. Cuando termine, continúe.</p>
+    <div class="guion" id="caso-guion"></div>
+    <div class="fila">
+      <button id="btn-caso-seguir" class="principal">Continuar</button>
+      <button id="btn-caso-volver" class="suave">Volver</button>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ inicio -->
+<section id="p-inicio" class="pantalla centrada">
+  <div class="caja">
+    <h1 id="inicio-titulo">Preparación</h1>
+    <p class="guia-texto" id="inicio-instrucciones"></p>
+    <p class="chico tenue" id="inicio-tareas"></p>
+
+    <ol class="pasos">
+      <li>Autorizar el uso de la cámara.</li>
+      <li>Ubicar el rostro dentro de la guía.</li>
+      <li>Observar los puntos de calibración y cinco de ajuste, uno por
+          uno. Requiere cerca de un minuto.</li>
+      <li>Utilizar el tablero.</li>
+    </ol>
+
+    <p class="chico tenue">
+      Se requiere iluminación frontal adecuada y mantenerse razonablemente
+      quieto. La calibración es obligatoria en cada sesión: la postura nunca
+      se repite con exactitud, y una calibración previa arrastra un error
+      sistemático que ningún filtro corrige.
+    </p>
+
+    <div class="fila">
+      <button id="btn-empezar" class="principal">Comenzar</button>
+      <button id="btn-menu" class="suave">Volver al menú</button>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ permiso -->
+<section id="p-permiso" class="pantalla centrada" hidden>
+  <div class="caja estrecha">
+    <div class="latido"></div>
+    <h2>Esperando la cámara</h2>
+    <p class="tenue" id="permiso-detalle">El navegador solicitará
+      autorización. Es necesaria para estimar la dirección de la mirada.</p>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- colocación -->
+<section id="p-colocacion" class="pantalla centrada" hidden>
+  <div class="caja estrecha">
+    <h2>Acomode su cara</h2>
+    <div class="guia-marco">
+      <video id="espejo" playsinline muted autoplay></video>
+      <div id="guia" class="guia"></div>
+    </div>
+    <p id="colocacion-estado" class="estado">Buscando su cara…</p>
+    <div class="barra"><div id="colocacion-barra"></div></div>
+    <p class="chico tenue">Permanezca en esta posición durante toda la sesión. Si
+      se desplaza después de calibrar, la precisión disminuye.</p>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------- calibración -->
+<section id="p-calibracion" class="pantalla" hidden>
+  <div class="calib-cabecera">
+    <span>Mire el punto hasta que se complete</span>
+    <span id="calib-n" class="dato">1 / 9</span>
+  </div>
+  <div id="punto" class="punto"></div>
+</section>
+
+<!-- ------------------------------------------------------------ tablero -->
+<section id="p-tablero" class="pantalla aparato" hidden>
+  <div class="panel">
+    <div id="consigna" class="consigna" hidden></div>
+    <div id="mensaje" class="mensaje vacio">Mire una celda y sostenga la mirada</div>
+  </div>
+  <div id="escena" class="escena"></div>
+  <div class="medidor">
+    <span>permanencias <b id="dwells">0</b></span>
+    <span><b id="fps">0 fps</b></span>
+    <span id="ajuste"></span>
+    <span id="diag" class="dato"></span>
+    <span class="tenue">1.2 s por selección</span>
+  </div>
+  <div id="cursor" class="cursor" hidden></div>
+  <div id="zoom-ind" class="zoom-ind" hidden></div>
+</section>
+
+<!-- ----------------------------------------------------------- deriva -->
+<section id="p-deriva" class="pantalla" hidden>
+  <div class="calib-cabecera">
+    <span>Ajuste final: mire el punto hasta que se complete</span>
+    <span id="deriva-n" class="dato">1 / 5</span>
+  </div>
+  <div id="deriva-punto" class="punto"></div>
+</section>
+
+<!-- -------------------------------------------------------- precisión -->
+<section id="p-precision" class="pantalla" hidden>
+  <div class="calib-cabecera">
+    <span>Mire el punto hasta que se complete</span>
+    <span id="prec-n" class="dato">1 / 9</span>
+  </div>
+  <div id="prec-punto" class="punto"></div>
+</section>
+
+<section id="p-resultado" class="pantalla centrada" hidden>
+  <div class="caja">
+    <h2>Precisión medida</h2>
+    <p class="tenue chico">Sobre nueve puntos distintos de los de la
+      calibración: mide cuánto sirve el modelo, no cuánto memorizó.</p>
+    <pre class="plano" id="res-texto"></pre>
+    <h3 class="sub">Qué se puede esperar del tablero</h3>
+    <table class="tabla" id="res-tabla"></table>
+    <p class="chico tenue" id="res-nota" style="margin-top:12px"></p>
+    <div class="fila" style="margin-top:20px">
+      <button id="btn-res-menu" class="principal">Volver al menú</button>
+      <button id="btn-res-copiar" class="suave">Copiar resultados</button>
+    </div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- error -->
+<section id="p-error" class="pantalla centrada" hidden>
+  <div class="caja estrecha">
+    <h2 id="error-msg">Algo falló</h2>
+    <p id="error-detalle" class="tenue chico"></p>
+    <button id="btn-reintentar" class="principal">Volver a empezar</button>
+  </div>
+</section>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

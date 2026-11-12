@@ -1,0 +1,449 @@
+/* Tablero de comunicación por mirada — interfaz del equipo.
+ *
+ * ## Por qué se ve como se ve
+ *
+ * Una versión anterior usaba azul pizarra con acento turquesa y tarjetas
+ * redondeadas con sombra. Se veía como un panel de control genérico. Tres
+ * cambios la acercan a un instrumento clínico:
+ *
+ * 1. **Grises neutros, sin tinte azul.** El azul pizarra es lo que delata a una
+ *    interfaz decorativa. El equipo médico usa negro y gris neutro porque no
+ *    compiten con la señal.
+ * 2. **Bordes de panel visibles, sin sombras.** Las celdas se separan por una
+ *    línea, como los módulos de un monitor, en vez de flotar sobre un fondo.
+ * 3. **Esquinas casi rectas.** Nada de píldoras: 3 px, lo justo para que no
+ *    corte.
+ *
+ * ## El verde no es decorativo
+ *
+ * Es el color convencional de "canal activo" en equipamiento médico, y además
+ * es el de mayor brillo percibido del espectro: el avance de la permanencia se
+ * ve por el rabillo del ojo mientras la persona mira el centro de la celda.
+ * Es el único color saturado de toda la pantalla, reservado a una sola cosa:
+ * dónde está la mirada y cuánto falta para que la celda dispare.
+ *
+ * ## Contraste
+ *
+ * Texto blanco puro sobre celdas oscuras. Quien usa esto lo mira fijo durante
+ * minutos y puede tener fatiga visual; el contraste pesa más que la sutileza.
+ */
+
+:root {
+  --fondo:        #0b0c0d;
+  --panel:        #141617;
+  --celda:        #1b1e1f;
+  --celda-ctrl:   #121415;
+  --celda-viva:   #262b2c;
+  --celda-emitir: #16211c;
+  --borde:        #32383a;
+  --borde-vivo:   #4a5355;
+  --texto:        #ffffff;
+  --tenue:        #8d9497;
+  --activo:       #3ecf8e;
+  --alerta:       #d9534f;
+  --f-ui: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --f-dato: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--fondo); color: var(--texto);
+  font-family: var(--f-ui); line-height: 1.5;
+  overflow: hidden; -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* El video que alimenta al detector facial.
+ *
+ * **Conserva su tamano natural.** La version anterior lo encogia a 2x2 px para
+ * ocultarlo, y MediaPipe lee de este elemento: le estaba llegando una imagen de
+ * dos pixeles. Los landmarks que salian de ahi no significaban nada, la
+ * calibracion juntaba basura y despues el tablero no apuntaba a ningun lado.
+ *
+ * Se oculta con `opacity` y mandandolo fuera de la vista, NUNCA cambiando sus
+ * dimensiones ni con `display:none`, que ademas detiene el renderizado y deja
+ * al detector sin cuadros. */
+#video {
+  position: fixed; top: 0; left: 0;
+  width: 320px; height: 240px;
+  opacity: 0; pointer-events: none; z-index: -1;
+  transform: translateX(-200vw);
+}
+
+/* El espejo comparte el mismo stream y SI se ve, dentro del ovalo de
+   colocacion. Sin esto la persona no tiene forma de saber donde esta su cara y
+   calibra a ciegas, que es la otra mitad del problema. */
+#espejo {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: 50% / 42%;
+  transform: scaleX(-1);   /* espejo: moverse a la derecha se ve a la derecha */
+  background: #000;
+}
+
+.pantalla { position: fixed; inset: 0; }
+.pantalla[hidden] { display: none !important; }
+.centrada { display: grid; place-items: center; overflow-y: auto; }
+
+.caja {
+  max-width: 660px; width: 100%;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 32px;
+}
+.caja.estrecha { max-width: 470px; text-align: center; }
+
+h1 {
+  font-size: clamp(1.4rem, 3.6vw, 1.85rem); margin: 0 0 14px;
+  font-weight: 600; letter-spacing: -.01em; text-wrap: balance;
+}
+h2 { font-size: 1.15rem; margin: 0 0 10px; font-weight: 600; }
+p { margin: 0 0 14px; }
+.guia-texto { max-width: 60ch; color: #c9ced0; }
+.tenue { color: var(--tenue); }
+.chico { font-size: .88rem; }
+.dato { font-family: var(--f-dato); }
+
+/* Bloque de información, marcado por una barra a la izquierda y no por un
+   relleno de color: la señal es la jerarquía, no el adorno. */
+.privacidad {
+  border-left: 3px solid var(--activo);
+  background: #111413;
+  padding: 14px 18px; margin: 20px 0; font-size: .94rem;
+}
+.privacidad strong { color: var(--activo); font-weight: 600; }
+.privacidad .chico { display: block; margin-top: 6px; color: var(--tenue); }
+
+.pasos { margin: 0 0 20px; padding-left: 20px; color: #c9ced0; }
+.pasos li { margin-bottom: 5px; }
+
+button.principal {
+  font: inherit; font-weight: 600; font-size: 1.05rem;
+  background: var(--activo); color: #06130d; border: 0;
+  border-radius: 3px; padding: 14px 32px; cursor: pointer;
+  margin-top: 10px; letter-spacing: .01em;
+}
+button.principal:hover { filter: brightness(1.1); }
+button.principal:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* ----------------------------------------------------------- colocación */
+.guia-marco {
+  position: relative; width: 230px; height: 290px; margin: 22px auto 16px;
+  overflow: hidden; border-radius: 50% / 42%;
+}
+.guia {
+  position: absolute; inset: 0; z-index: 2;
+  border: 3px dashed var(--borde-vivo); border-radius: 50% / 42%;
+  transition: border-color .18s ease;
+}
+.guia.ok { border-color: var(--activo); border-style: solid; }
+.estado { min-height: 1.5em; color: #c9ced0; }
+.barra {
+  height: 4px; background: var(--celda-ctrl);
+  border: 1px solid var(--borde); overflow: hidden; margin: 12px 0 16px;
+}
+.barra > div {
+  height: 100%; width: 0; background: var(--activo);
+  transition: width .1s linear;
+}
+
+/* ---------------------------------------------------------- calibración */
+.calib-cabecera {
+  position: absolute; top: max(16px, env(safe-area-inset-top, 0px));
+  left: 0; right: 0; display: flex; justify-content: center; gap: 20px;
+  color: var(--tenue); font-size: .88rem;
+}
+.punto {
+  position: absolute; width: 32px; height: 32px; margin: -16px 0 0 -16px;
+  border-radius: 50%; background: var(--celda-ctrl);
+  border: 2px solid var(--borde-vivo);
+  display: grid; place-items: center;
+}
+.punto::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--tenue);
+}
+.punto.grabando { border-color: var(--activo); }
+.punto.grabando::before { background: var(--activo); }
+/* El anillo que se completa dice cuánto falta en este punto. Sin él, nueve
+   puntos idénticos se sienten eternos porque no hay señal de avance. */
+.punto.grabando::after {
+  content: ""; position: absolute; inset: -9px; border-radius: 50%;
+  background: conic-gradient(var(--activo) calc(var(--avance, 0) * 360deg),
+                             transparent 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent 73%, #000 75%);
+          mask: radial-gradient(farthest-side, transparent 73%, #000 75%);
+}
+
+/* --------------------------------------------------------------- equipo */
+.aparato {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: max(8px, env(safe-area-inset-top, 0px))
+           max(8px, env(safe-area-inset-right, 0px))
+           max(8px, env(safe-area-inset-bottom, 0px))
+           max(8px, env(safe-area-inset-left, 0px));
+}
+.panel {
+  background: var(--panel); border: 1px solid var(--borde);
+  border-left: 3px solid var(--activo);
+  border-radius: 3px; padding: 12px 20px; min-height: 11vh;
+  display: flex; align-items: center;
+}
+.mensaje {
+  font-size: clamp(1.1rem, 3.4vw, 2rem); font-weight: 600;
+  width: 100%; text-align: center; word-break: break-word;
+}
+.mensaje.vacio { color: var(--tenue); font-weight: 400; }
+
+.escena { flex: 1; min-height: 0; display: flex; }
+.grilla {
+  flex: 1; display: grid; gap: 6px;
+  grid-template-columns: repeat(var(--cols, 5), 1fr);
+}
+
+.celda {
+  position: relative; overflow: hidden;
+  background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; display: grid; place-items: center;
+  text-align: center; padding: 4px 8px;
+  font-weight: 600; font-size: clamp(.78rem, 2vw, 1.5rem);
+  letter-spacing: .01em;
+}
+/* Los controles van MÁS oscuros que el vocabulario: son herramientas, no es
+   lo que la persona quiere decir. */
+.celda.ctrl { background: var(--celda-ctrl); color: var(--tenue); }
+/* HABLAR es la excepción: es la celda que emite, y hundirla junto a BORRAR
+   la volvía lo más difícil de encontrar siendo lo más buscado. */
+.celda.hablar {
+  background: var(--celda-emitir); color: var(--activo);
+  border-color: #2d4a3c;
+}
+.celda.viva { background: var(--celda-viva); border-color: var(--borde-vivo); }
+
+/* Doble señal del avance: el relleno dice que el sistema sigue a esta persona,
+   el trazo dice cuánto falta. Mirando el centro de la celda -que es lo que uno
+   hace- el trazo se percibe por el rabillo del ojo. */
+.celda .relleno {
+  position: absolute; inset: 0; background: var(--activo);
+  opacity: calc(var(--avance, 0) * .20); pointer-events: none;
+}
+.celda .trazo {
+  position: absolute; left: 0; bottom: 0; height: 4px;
+  width: calc(var(--avance, 0) * 100%); background: var(--activo);
+  pointer-events: none;
+}
+.celda .etq { position: relative; }
+
+.candidatos { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.candidatos .cab {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; padding: 2px 4px 4px;
+}
+.candidatos .cab h2 { margin: 0; }
+.candidatos .sello {
+  font-family: var(--f-dato); font-size: .76rem; color: var(--tenue);
+}
+.opcion { flex: 1; font-size: clamp(.95rem, 2.6vw, 1.5rem); min-height: 56px; }
+.opcion.literal { background: var(--celda-ctrl); color: var(--tenue); }
+
+/* Lectura de estado, como el pie de un instrumento: cifras monoespaciadas,
+   alineadas, sin color. */
+.medidor {
+  display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;
+  background: var(--panel); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 6px 14px;
+  font-family: var(--f-dato); font-size: .74rem; color: var(--tenue);
+  letter-spacing: .02em;
+}
+.medidor b { color: var(--texto); font-variant-numeric: tabular-nums; }
+
+/* El cursor va perfilado en oscuro porque cae encima de la etiqueta de la
+   celda -el centro es justo donde uno mira- y un aro claro sobre una letra
+   clara se confunde con la letra. */
+.cursor {
+  position: fixed; left: 0; top: 0; width: 24px; height: 24px;
+  margin: -12px 0 0 -12px; border-radius: 50%;
+  border: 2px solid var(--activo); box-shadow: 0 0 0 3px var(--fondo);
+  pointer-events: none; z-index: 50;
+}
+.cursor::after {
+  content: ""; position: absolute; inset: 8px; border-radius: 50%;
+  background: var(--activo); box-shadow: 0 0 0 2px var(--fondo);
+}
+.cursor[hidden] { display: none; }
+
+.latido {
+  width: 10px; height: 10px; border-radius: 50%; background: var(--activo);
+  margin: 0 auto 22px; animation: latir 1.3s ease-in-out infinite;
+}
+@keyframes latir { 0%, 100% { opacity: .22 } 50% { opacity: 1 } }
+
+@media (prefers-reduced-motion: reduce) {
+  .latido { animation: none; opacity: .8 }
+  .barra > div, .guia { transition: none }
+}
+
+@media (max-width: 560px) {
+  .grilla { gap: 4px }
+  .guia-marco { width: 180px; height: 225px }
+  .medidor { gap: 14px }
+}
+
+/* ---------------------------------------------------------------- menú */
+.opciones { display: flex; flex-direction: column; gap: 6px; margin: 22px 0; }
+.opcion-modo {
+  font: inherit; color: var(--texto); text-align: left; cursor: pointer;
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 14px 16px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.opcion-modo:hover { background: var(--celda-viva); border-color: var(--activo); }
+.opcion-modo:focus-visible { outline: 2px solid var(--activo); outline-offset: 2px; }
+.opcion-modo .n {
+  flex: 0 0 26px; height: 26px; display: grid; place-items: center;
+  background: var(--celda-ctrl); border: 1px solid var(--borde);
+  color: var(--activo); font-family: var(--f-dato); font-size: .82rem;
+  font-weight: 600;
+}
+.opcion-modo .cuerpo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.opcion-modo .titulo { font-weight: 600; }
+.opcion-modo .detalle { color: var(--tenue); font-size: .86rem; line-height: 1.45; }
+
+/* El selector de estimador. Dos tarjetas lado a lado, con la puesta marcada
+   por un borde vivo y no por un color de relleno: la que está puesta tiene que
+   leerse de un vistazo al volver al menú después de una medición. */
+.bloque-est {
+  border-top: 1px solid var(--borde); padding-top: 18px; margin-top: 4px;
+}
+.estimadores {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;
+}
+@media (max-width: 620px) { .estimadores { grid-template-columns: 1fr } }
+.opcion-est {
+  font: inherit; color: var(--texto); text-align: left; cursor: pointer;
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--celda-ctrl); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 12px 14px;
+  transition: border-color .12s ease, background .12s ease;
+}
+.opcion-est:hover { background: var(--celda); border-color: var(--borde-vivo); }
+.opcion-est:focus-visible { outline: 2px solid var(--activo); outline-offset: 2px; }
+.opcion-est .titulo { font-weight: 600; font-size: .95rem; }
+.opcion-est .detalle { color: var(--tenue); font-size: .82rem; line-height: 1.45; }
+.opcion-est.puesto {
+  border-color: var(--activo); background: var(--celda);
+  cursor: default;
+}
+.opcion-est.puesto .titulo::after {
+  content: " · en uso"; color: var(--activo); font-weight: 500;
+  font-family: var(--f-dato); font-size: .76rem;
+}
+
+/* WebGazer inyecta su propio video, su malla facial, su recuadro de encuadre y
+   un punto rojo de predicción. La interfaz ya tiene su óvalo y su cursor, así
+   que todo eso sobra.
+
+   Pero NO con `display: none`, que es lo que hace WebGazer cuando
+   `showVideo` es false. Su propio código trata a Safari y a Firefox como
+   excepción y ahí usa `opacity: 0`, justamente porque un <video> sin caja deja
+   de entregar cuadros y `drawImage` saca una imagen vacía. Es el mismo fallo
+   que tuvo este proyecto con `#video { width: 2px }`: el detector recibía una
+   imagen de dos píxeles y la calibración juntaba basura con forma de datos.
+
+   Acá se fuerza lo contrario -queda con sus dimensiones reales- y se lo
+   empuja fuera de la pantalla. `!important` porque WebGazer escribe
+   `style.display` directo en el elemento. */
+#webgazerVideoContainer {
+  display: block !important;
+  position: fixed !important; top: 0 !important; left: 0 !important;
+  opacity: 0 !important; pointer-events: none !important;
+  z-index: -1 !important;
+  transform: translateX(-200vw) !important;
+}
+#webgazerVideoFeed { display: block !important; }
+#webgazerGazeDot, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
+  display: none !important;
+}
+
+.fila { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button.suave {
+  font: inherit; font-weight: 500; cursor: pointer;
+  background: transparent; color: var(--tenue);
+  border: 1px solid var(--borde); border-radius: 3px; padding: 13px 20px;
+}
+button.suave:hover { color: var(--texto); border-color: var(--borde-vivo); }
+
+/* El guion del caso: ancho de LECTURA, no ancho de pantalla. Lo lee la
+   persona que va a interpretar el papel, no el investigador. */
+.guion {
+  white-space: pre-wrap; max-width: 56ch;
+  font-size: 1.08rem; line-height: 1.75; color: #c9ced0;
+  border-left: 3px solid var(--activo); padding: 18px 22px;
+  background: #111413; margin: 18px 0 22px;
+}
+
+/* La consigna de la tarea, arriba del mensaje compuesto. */
+.consigna {
+  font-family: var(--f-dato); font-size: .78rem; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--activo);
+  margin-bottom: 4px; text-align: center;
+}
+.panel { flex-direction: column; justify-content: center; }
+
+/* ------------------------------------------------------- resultados */
+pre.plano {
+  white-space: pre-wrap; font-family: var(--f-dato); font-size: .84rem;
+  line-height: 1.6; background: var(--celda); border: 1px solid var(--borde);
+  border-radius: 3px; padding: 16px; margin: 16px 0; overflow-x: auto;
+  color: var(--texto);
+}
+h3.sub {
+  font-size: .82rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--tenue); margin: 22px 0 8px; font-weight: 600;
+}
+.tabla { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.tabla td, .tabla th {
+  padding: 8px 10px; border-bottom: 1px solid var(--borde); text-align: left;
+}
+.tabla th {
+  color: var(--tenue); font-size: .76rem; text-transform: uppercase;
+  letter-spacing: .05em; font-weight: 600;
+}
+.tabla td.num { text-align: right; font-family: var(--f-dato);
+                font-variant-numeric: tabular-nums; }
+.tabla tr.bien td { color: var(--activo); }
+.tabla tr.mal td.num { color: var(--alerta); }
+
+/* ------------------------------------------------------------- zoom */
+/* La grilla crece alrededor del punto mirado. La transición importa: un salto
+   instantáneo rompe la conexión espacial y obliga a buscar todo de nuevo. */
+.grilla {
+  transition: transform .18s cubic-bezier(.2, .7, .3, 1);
+  will-change: transform;
+}
+.escena { overflow: hidden; }
+
+.zoom-ind {
+  position: fixed; right: max(14px, env(safe-area-inset-right, 0px));
+  top: max(14px, env(safe-area-inset-top, 0px));
+  font-family: var(--f-dato); font-size: .76rem; letter-spacing: .06em;
+  color: var(--activo); background: var(--panel);
+  border: 1px solid var(--borde); border-radius: 3px; padding: 3px 9px;
+  z-index: 60; pointer-events: none;
+}
+.zoom-ind[hidden] { display: none; }
+
+/* Mientras se acumula el acercamiento, el cursor engorda su aro: es la única
+   señal de que algo está por pasar cuando todavía no hay celda elegida. */
+.cursor::before {
+  content: ""; position: absolute; inset: -6px; border-radius: 50%;
+  border: 2px solid var(--activo);
+  opacity: calc(var(--zoom-avance, 0) * .85);
+  transform: scale(calc(1 - var(--zoom-avance, 0) * .25));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grilla { transition: none }
+}
