@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .metrics import NEGATION, STOP_MARKERS, _has_any, token_f1
+from .metrics import NEGATION, STOP_MARKERS, _has_any, sin_cortesia, token_f1
 from .prompts import normalise
 
 
@@ -92,11 +92,13 @@ def foreign_nouns(telegraphic: str, candidate: str) -> list[str]:
 
 
 def _negates(text: str) -> bool:
-    return _has_any(text, NEGATION)
+    # "de nada" no niega: ver metrics.CORTESIA_SIN_NEGACION.
+    return _has_any(sin_cortesia(text), NEGATION)
 
 
 def _stops(text: str) -> bool:
-    return _has_any(text, STOP_MARKERS) or _has_any(text, NEGATION)
+    t = sin_cortesia(text)
+    return _has_any(t, STOP_MARKERS) or _has_any(t, NEGATION)
 
 
 def needs_negation(telegraphic: str) -> bool:

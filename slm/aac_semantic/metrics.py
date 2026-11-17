@@ -193,6 +193,24 @@ def best_match(candidate: str, references: list[str]) -> float:
     return max((token_f1(candidate, r) for r in references), default=0.0)
 
 
+CORTESIA_SIN_NEGACION = ("de nada",)
+"""Fórmulas que contienen una palabra negativa y no niegan nada.
+
+"de nada" tiene "nada", que está en NEGATION, así que contaba como negación y
+como orden de detenerse. Medido en la página: `BASTA` -> "de nada" pasaba el
+filtro como si fuera "basta". En las respuestas históricas aparece 2 veces en
+724 candidatos para entradas con BASTA; a la temperatura de la página salió en
+la primera tanda de diez entradas."""
+
+
+def sin_cortesia(text: str) -> str:
+    """El texto sin las fórmulas de CORTESIA_SIN_NEGACION."""
+    t = f" {normalise(text)} "
+    for f in CORTESIA_SIN_NEGACION:
+        t = t.replace(f" {normalise(f)} ", " ")
+    return t.strip()
+
+
 def _has_any(text: str, needles) -> bool:
     """Whole-word / phrase containment on the normalised string.
 
@@ -318,10 +336,12 @@ def score_item(item: dict, candidates: list[str], fmt: str, latency_s: float,
     polarity = item.get("must_keep_polarity", "none")
     if candidates:
         if polarity == "negative":
-            score.polarity_ok = all(_has_any(c, NEGATION) for c in candidates)
+            score.polarity_ok = all(_has_any(sin_cortesia(c), NEGATION)
+                                    for c in candidates)
         elif polarity == "negative-stop":
             score.polarity_ok = all(
-                _has_any(c, STOP_MARKERS) or _has_any(c, NEGATION)
+                _has_any(sin_cortesia(c), STOP_MARKERS)
+                or _has_any(sin_cortesia(c), NEGATION)
                 for c in candidates)
         elif polarity == "uncertain":
             # A "TAL VEZ" resolved into sí or no has destroyed the one thing

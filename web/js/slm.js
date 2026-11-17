@@ -22,16 +22,37 @@
  */
 
 import { PROMPT_SISTEMA, construirUsuario } from "./prompt.js";
+import { procesar, procesarSinFiltro, filtrar, conLiteral }
+  from "./expansion.js";
 
-const MODELO_WEB = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
+/* La versión de WebLLM. Exportada para que el banco de pruebas cargue la misma
+ * y no otra: dos versiones pueden muestrear distinto con los mismos pesos. */
+export const WEBLLM = "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm";
+
+/* La temperatura con la que corre la página. Está acá y no escrita en la
+ * llamada para que el banco de pruebas mida ESTE número. */
+export const TEMPERATURA = 0.9;
+export const MAX_TOKENS = 160;
+
+export const MODELO_WEB = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
 /* El 1.5b y no el 7b: el 7b en el navegador son ~4.5 GB de descarga y bastante
  * más VRAM de la que tiene una notebook común. Sobre el corpus el 1.5b saca
  * 62% de recall contra 77% del 7b, así que esta página muestra una versión
  * MÁS DÉBIL que la medida. Se dice en pantalla, no se disimula. */
 
 export class SLM {
-  constructor(grabados) {
+  /**
+   * @param {object} grabados  salidas reales guardadas, para el modo grabado
+   * @param {object} [opciones]  solo para el banco de pruebas: la página usa
+   *   los valores por defecto, que son los de arriba. Se pueden cambiar acá
+   *   para medir alternativas con ESTA MISMA clase, en vez de con una copia.
+   */
+  constructor(grabados, opciones = {}) {
     this.grabados = grabados || {};
+    this.modelo = opciones.modelo ?? MODELO_WEB;
+    this.temperatura = opciones.temperatura ?? TEMPERATURA;
+    this.sistema = opciones.sistema ?? PROMPT_SISTEMA;
+    this.sinFiltro = !!opciones.sinFiltro;
     /** Quién usa el tablero, para el prompt. Vacío salvo en la condición
      *  contextualizada: la diferencia entre llenarlo y no llenarlo ES la
      *  variable independiente de esa comparación. */
@@ -61,9 +82,8 @@ export class SLM {
     }
     this.cargando = true;
     try {
-      const webllm = await import(
-        "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/+esm");
-      this.motor = await webllm.CreateMLCEngine(MODELO_WEB, {
+      const webllm = await import(WEBLLM);
+      this.motor = await webllm.CreateMLCEngine(this.modelo, {
         initProgressCallback: (p) => {
           this.progreso = p.progress ?? 0;
           alProgresar?.(p.text ?? "", this.progreso);
@@ -79,9 +99,18 @@ export class SLM {
     }
   }
 
+  /** Libera la GPU. La página no lo necesita; el banco sí, entre modelos. */
+  async descargar() {
+    try { await this.motor?.unload(); } catch (_) { /* ya no estaba */ }
+    this.motor = null;
+  }
+
   /**
    * @param {string} telegrama  lo que se armó en el tablero
-   * @returns {Promise<{candidatos: string[], modo: string, ms: number}>}
+   * @returns {Promise<{candidatos: string[], modo: string, ms: number,
+   *   crudo?: string, descartados?: Array<[string,string]>, uso?: object}>}
+   *   `crudo`, `descartados` y `uso` solo vienen en modo vivo: son para
+   *   el banco de pruebas, la página no los mira.
    */
   async expandir(telegrama) {
     const t = telegrama.trim();
@@ -95,22 +124,31 @@ export class SLM {
         // los datos de la persona como parte de lo que quiso decir, que es el
         // error que el filtro de invención después castiga.
         const system = this.contexto
-          ? [PROMPT_SISTEMA, "", "Sobre quien usa el tablero:",
+          ? [this.sistema, "", "Sobre quien usa el tablero:",
              this.contexto].join("\n")
-          : PROMPT_SISTEMA;
+          : this.sistema;
         const r = await this.motor.chat.completions.create({
           messages: [
             { role: "system", content: system },
             { role: "user", content: construirUsuario(t) },
           ],
-          temperature: 0.9,
-          max_tokens: 160,
+          temperature: this.temperatura,
+          max_tokens: MAX_TOKENS,
+          // Qwen3 razona antes de contestar si no se le dice que no: cientos
+          // de tokens de más por pedido. Los demás modelos lo ignoran.
+          extra_body: { enable_thinking: false },
         });
         const texto = r.choices?.[0]?.message?.content ?? "";
+        // Parsear, FILTRAR y garantizar el literal: ver expansion.js. Antes
+        // de este cambio la página saltaba el filtro.
+        const p = this.sinFiltro ? procesarSinFiltro(t, texto) : procesar(t, texto);
         return {
-          candidatos: conLiteral(parsear(texto), t),
+          candidatos: p.candidatos,
           modo: "vivo",
           ms: Math.round(performance.now() - t0),
+          crudo: texto,
+          descartados: p.descartados,
+          uso: r.usage ?? null,
         };
       } catch (e) {
         this.error = String(e?.message || e);
@@ -120,44 +158,11 @@ export class SLM {
 
     const g = this.grabados[t.toUpperCase()];
     return {
-      candidatos: conLiteral(g ? g.c.slice() : [], t),
+      // Las salidas grabadas también pasan por el filtro: son respuestas
+      // reales de un modelo y pueden traer los mismos vuelcos.
+      candidatos: conLiteral(g ? filtrar(t, g.c).candidatos : [], t),
       modo: g ? "grabado" : "literal",
       ms: g ? g.ms : 0,
     };
   }
-}
-
-/* La salida de escape del diseño: el literal SIEMPRE disponible, lo haya
- * propuesto el modelo o no. Si las tres propuestas están mal, la persona tiene
- * que poder decir exactamente lo que escribió - el tablero pelado ya podía, y
- * este módulo no debería quitárselo. */
-function conLiteral(lista, telegrama) {
-  const lit = telegrama.toLowerCase();
-  const fuera = lista.filter((c) => c && c.toLowerCase() !== lit).slice(0, 3);
-  return [...fuera, lit];
-}
-
-/* Tolera las formas en que un modelo chico responde: JSON con "candidatos",
- * un array pelado, o líneas con viñetas. Un modelo que acierta pero contesta
- * en prosa es un fallo de formato, no de la tarea, y tratarlos igual
- * confundiría las dos cosas. */
-function parsear(texto) {
-  const t = (texto || "").trim();
-  if (!t) return [];
-  try {
-    const bloque = t.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-    if (bloque) {
-      const j = JSON.parse(bloque[0]);
-      const arr = Array.isArray(j) ? j
-        : (j.candidatos || j.candidates || j.opciones || []);
-      if (Array.isArray(arr) && arr.length) {
-        return arr.map((s) => String(s).trim()).filter(Boolean).slice(0, 3);
-      }
-    }
-  } catch (_) { /* no era JSON: se sigue por líneas */ }
-
-  return t.split(/\r?\n/)
-    .map((l) => l.replace(/^[\s\-*•\d.)"']+/, "").replace(/["',]+$/, "").trim())
-    .filter((l) => l && l.length < 90)
-    .slice(0, 3);
 }
