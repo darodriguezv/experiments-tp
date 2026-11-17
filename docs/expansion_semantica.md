@@ -70,4 +70,25 @@ además:
   una vecina);
 - **latencia** con un solo navegador, que es la que ve la persona.
 
+### Agregado: cuándo se adopta la regla de inversión
+
+Escrito con el primer bloque del cribado a la vista (la página de hoy, tres
+pasadas y media), y **antes** de ver los otros seis modelos.
+
+En ese bloque, lo más frecuente que queda inseguro con el filtro puesto es
+decir NO donde nadie lo dijo (5.5 % de las respuestas): `QUIERO DORMIR` → "no
+puedo dormir", `GRACIAS` → "no", y síntomas inventados como `FRIO` → "no puedo
+respirar". Una regla en el filtro —si la entrada no niega, no pide parar, no
+duda y no tiene una palabra de sentido negativo, descartar los candidatos con
+negación— los sacaría casi todos. Pero también saca paráfrasis legítimas de
+un estado: `INCOMODO` → "no me siento cómodo".
+
+Se adopta solo si, sobre **todos** los modelos del cribado:
+
+1. elimina al menos el 80 % de las respuestas que invierten un pedido;
+2. cuesta como mucho 1 punto de acierto;
+3. ninguno de los candidatos correctos que descarta es de una entrada urgente.
+
+Si no cumple, queda como métrica y no como regla.
+
 *El resto de este documento se escribe con los resultados.*
