@@ -514,6 +514,24 @@ def _prompt_variants_are_nested() -> str:
     # vez de disimuladas. No se arreglan porque ya fueron medidas: reescribir
     # un prompt medido invalida sus resultados.
     REESCRIBEN = {"v1-reglas", "v2-ejemplos", "v3-json", "v5-lecturas"}
+
+    # La otra forma atribuible de diferir: SUSTITUIR una lista declarada de
+    # frases y nada más. v12-neutro es v4-literal con el registro cambiado
+    # (tú en vez de vos). No agrega, así que no es subsecuencia de nadie; pero
+    # deshacer sus sustituciones tiene que devolver v4 EXACTO, carácter por
+    # carácter. Si alguien la edita a mano y le cambia algo más, esto falla.
+    SUSTITUYEN = {"v12-neutro": ("v4-literal", prompts._VOS_A_NEUTRO)}
+    for nombre, (base, cambios) in SUSTITUYEN.items():
+        texto = prompts.VARIANTS[nombre].system
+        for viejo, nuevo in reversed(cambios):
+            assert texto.count(nuevo) == 1, (nombre, nuevo)
+            texto = texto.replace(nuevo, viejo)
+        assert texto == prompts.VARIANTS[base].system, (
+            f"{nombre} difiere de {base} en algo más que las sustituciones "
+            f"declaradas")
+        padres[nombre] = base
+    huerfanas = [h for h in huerfanas if h not in SUSTITUYEN]
+
     nuevas = set(huerfanas) - REESCRIBEN
     assert not nuevas, (
         f"{sorted(nuevas)} no contiene a ninguna variante anterior. Cada "

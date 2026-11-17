@@ -1,0 +1,7 @@
+{
+  "name": "banco-slm",
+  "private": true,
+  "type": "module",
+  "description": "Corre el corpus de expansión semántica contra la página real (WebLLM + WebGPU) en Chrome sin ventana.",
+  "dependencies": { "puppeteer-core": "23.11.1" }
+}

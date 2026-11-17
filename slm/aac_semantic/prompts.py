@@ -473,10 +473,51 @@ def _v11() -> Prompt:
     )
 
 
+# El registro: tú en vez de vos, y nada más.
+#
+# Todas las variantes anteriores están escritas en voseo ("Sos", "Hablás",
+# "devolvé") y sus ejemplos también ("prendé la luz", "apagá la luz"). Los
+# modelos imitan el registro del prompt, así que el tablero le ponía en la boca
+# a la persona un español que no es el suyo: el criterio del proyecto es
+# español neutro.
+_VOS_A_NEUTRO = (
+    ("Sos el módulo", "Eres el módulo"),
+    ("no sabés la temperatura", "no sabes la temperatura"),
+    ("4. Hablás EN PRIMERA PERSONA", "4. Habla EN PRIMERA PERSONA"),
+    ("5. Español neutro, natural, breve.",
+     "5. Español neutro, natural, breve. Usa tú, nunca vos."),
+    ("devolvé la entrada tal cual", "devuelve la entrada tal cual"),
+    ('"prendé la luz", "apagá la luz"', '"enciende la luz", "apaga la luz"'),
+    ("Devolvé SOLO un objeto JSON", "Devuelve SOLO un objeto JSON"),
+)
+
+
+def _v12() -> Prompt:
+    """v4-literal con el registro cambiado a español neutro. Nada más.
+
+    Se arma reemplazando frases exactas de v4, y cada reemplazo se verifica: si
+    alguien edita v4 y una frase deja de existir, esto falla en vez de producir
+    en silencio una variante que difiere de v4 en más de una cosa.
+    """
+    base = _v4()
+    texto = base.system
+    for viejo, nuevo in _VOS_A_NEUTRO:
+        if viejo not in texto:
+            raise ValueError(f"v12-neutro: no está {viejo!r} en v4-literal")
+        texto = texto.replace(viejo, nuevo)
+    return Prompt(
+        variant="v12-neutro",
+        adds="v4-literal en español neutro: tú en vez de vos, también en los "
+             "ejemplos",
+        system=texto,
+        json_mode=base.json_mode,
+    )
+
+
 VARIANTS: dict[str, Prompt] = {
     p.variant: p for p in (_v0(), _v1(), _v2(), _v3(), _v4(), _v5(),
                            _v6(), _v7(), _v8(), _v9(),
-                           _v10(), _v11())
+                           _v10(), _v11(), _v12())
 }
 
 
