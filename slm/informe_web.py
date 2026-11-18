@@ -32,7 +32,7 @@ AQUI = Path(__file__).resolve().parent
 sys.path.insert(0, str(AQUI))
 
 from aac_semantic import guard, metrics, prompts  # noqa: E402
-from aac_semantic.metrics import NEGATION, MATCH_F1, _has_any, best_match  # noqa: E402
+from aac_semantic.metrics import NEGATION, _has_any  # noqa: E402
 from aac_semantic.prompts import normalise  # noqa: E402
 from aac_semantic.registro import con_referencias_neutras, tiene_voseo  # noqa: E402
 from aac_semantic.runner import load_corpus  # noqa: E402
@@ -260,6 +260,12 @@ METRICAS = {
     "hay_eleccion": (lambda m, p: m.por[p].choice_ok, True),
     "voseo": (lambda m, p: m.voseo[p], False),
     "formato_json": (lambda m, p: m.formato == "json", True),
+    "diversidad": (lambda m, p: m.por[p].diversity, True),
+    # Solo en las entradas con más de una lectura aceptada: de cuántas
+    # propone algo. Es lo que pide la regla 6 del prompt, y lo primero que una
+    # temperatura baja podría sacrificar.
+    "cobertura_lecturas": (lambda m, p: (m.por[p].readings_covered / m.por[p].readings_total
+                                         if m.por[p].readings_total > 1 else None), True),
 }
 
 
@@ -289,6 +295,21 @@ def resumen_celda(muestras: list[Muestra], p: str = "con") -> dict:
     r["entradas_alguna_vez_inseguras"] = float(np.mean(ins > 0)) if len(ins) else float("nan")
     r["acierto_por_item"] = dict(zip(ids, hit.tolist()))
 
+    # Constancia: para una misma entrada, cuánto se parecen entre sí los
+    # conjuntos que ve la persona en tiradas distintas (Jaccard promedio de
+    # los pares). 1 = siempre las mismas opciones. Es lo que permite aprender
+    # dónde está lo que se busca, y el argumento que tenía el harness original
+    # para correr a temperatura 0.2.
+    por_item_sets: dict[str, list[frozenset]] = defaultdict(list)
+    for m in ok:
+        por_item_sets[m.item_id].append(frozenset(normalise(c) for c in m.por[p].candidates))
+    jac = []
+    for conj in por_item_sets.values():
+        pares = [(a, b) for i, a in enumerate(conj) for b in conj[i + 1:]]
+        if pares:
+            jac.append(np.mean([len(a & b) / len(a | b) if a | b else 1.0 for a, b in pares]))
+    r["constancia"] = float(np.mean(jac)) if jac else float("nan")
+
     unicos = [m for m in todas if m.paralelo == 1]
     ms = np.array([m.ms for m in unicos]) if unicos else np.array([])
     r["ms_p50"] = float(np.median(ms)) if len(ms) else float("nan")
@@ -301,6 +322,15 @@ def resumen_celda(muestras: list[Muestra], p: str = "con") -> dict:
 
 
 # ------------------------------------------------------------- el filtro
+
+
+def es_acierto(item: dict, candidatos) -> bool:
+    """¿Estos candidatos ya serían un acierto? Con la misma definición que la
+    métrica -polaridad y parada incluidas-, para que "descarte correcto" y
+    "acierto" no midan cosas distintas."""
+    if isinstance(candidatos, str):
+        candidatos = [candidatos]
+    return metrics.score_item(item, list(candidatos), "", 0.0, model="", variant="").hit
 
 
 def costo_del_filtro(muestras: list[Muestra], corpus: dict) -> dict:
@@ -318,7 +348,7 @@ def costo_del_filtro(muestras: list[Muestra], corpus: dict) -> dict:
         for texto, motivo in m.descartados:
             descartes += 1
             motivos[motivo.split(" y la entrada")[0]] += 1
-            if refs and best_match(texto, refs) >= MATCH_F1:
+            if es_acierto(corpus[m.item_id], texto):
                 buenos += 1
                 if len(ejemplos_buenos) < 6:
                     ejemplos_buenos.append((corpus[m.item_id]["input"], texto, motivo))
@@ -328,16 +358,23 @@ def costo_del_filtro(muestras: list[Muestra], corpus: dict) -> dict:
                 ejemplos_buenos=ejemplos_buenos)
 
 
+def aplica_regla_inversion(entrada: str) -> bool:
+    """Si la regla de inversión le toca a esta entrada. Solo mira la entrada,
+    como tendría que hacerlo el filtro en la página, que no conoce el corpus."""
+    return bool(normalise(entrada)) and not (
+        guard.needs_negation(entrada) or guard.needs_stop(entrada)
+        or guard.is_uncertain(entrada) or _sentido_negativo(entrada))
+
+
 def regla_inversion(muestras: list[Muestra], corpus: dict) -> dict:
     """¿Conviene que el filtro descarte también las negaciones que la entrada no
-    trae? Se simula sobre lo medido: cuántos candidatos descartaría, cuántos de
-    esos eran correctos, y qué le pasa al acierto.
-
-    La regla que se simula es la única que el filtro puede aplicar sin conocer
-    el corpus: si la entrada no tiene NO, ni BASTA, ni duda, todo candidato con
-    una negación se descarta."""
+    trae? Se simula sobre lo medido y se informan los tres números del criterio
+    fijado en docs/expansion_semantica.md: qué fracción de las inversiones
+    elimina, cuánto acierto cuesta, y si descarta algo correcto en una entrada
+    urgente."""
     ok = [m for m in muestras if not m.error and not m.solo_latencia]
-    descartaria = correctos = 0
+    descartaria = correctos = correctos_urgentes = 0
+    inv_antes = inv_despues = 0
     acierto_antes = acierto_despues = 0
     ejemplos_correctos = []
     for m in ok:
@@ -345,24 +382,28 @@ def regla_inversion(muestras: list[Muestra], corpus: dict) -> dict:
         e = item["input"]
         cands = m.por["con"].candidates
         refs = [a for r in item.get("readings", []) for a in r.get("accept", [])]
-        aplica = bool(normalise(e)) and not (
-            guard.needs_negation(e) or guard.needs_stop(e)
-            or guard.is_uncertain(e) or _sentido_negativo(e))
         lit = normalise(e)
         quedan = []
         for c in cands:
-            if aplica and normalise(c) != lit and _has_any(c, NEGATION):
+            if (aplica_regla_inversion(e) and normalise(c) != lit
+                    and _has_any(c, NEGATION)):
                 descartaria += 1
-                if refs and best_match(c, refs) >= MATCH_F1:
+                if es_acierto(item, c):
                     correctos += 1
+                    correctos_urgentes += item.get("urgency") == "high"
                     if len(ejemplos_correctos) < 6:
                         ejemplos_correctos.append((e, c))
                 continue
             quedan.append(c)
+        propios = [c for c in quedan if normalise(c) != lit]
+        inv_antes += m.invierte["con"]
+        inv_despues += invierte_pedido(item, propios)
         acierto_antes += m.por["con"].hit
-        acierto_despues += bool(refs) and any(best_match(c, refs) >= MATCH_F1 for c in quedan)
+        acierto_despues += es_acierto(item, quedan)
     n = max(1, len(ok))
-    return dict(descartaria=descartaria, correctos=correctos,
+    return dict(n=len(ok), descartaria=descartaria, correctos=correctos,
+                correctos_urgentes=correctos_urgentes,
+                inv_antes=inv_antes, inv_despues=inv_despues,
                 acierto_antes=acierto_antes / n, acierto_despues=acierto_despues / n,
                 ejemplos_correctos=ejemplos_correctos)
 
@@ -545,6 +586,32 @@ def escribir_md(filas, celdas, por_id, rutas, agregadas) -> str:
                         filas_d))
         a("")
 
+    # --- el modelo solo: mismo prompt, mismo todo, otro modelo
+    MISMO = ("Qwen2.5-1.5B-Instruct-q4f16_1-MLC", "v12-neutro", 0.9, "")
+    if MISMO in porc:
+        a("### El efecto del modelo solo")
+        a("")
+        a(f"Contra `{nombre_celda(MISMO)}`: el modelo de hoy con el MISMO prompt"
+          " neutro. Lo único que cambia es el modelo. La primera fila de la"
+          " tabla anterior, en cambio, mide el efecto del prompt solo.")
+        a("")
+        ref_hit = porc[MISMO]["con"]["acierto_por_item"]
+        ref_mod = _por_item(celdas[MISMO], lambda m: m.por["aporte"].hit)
+        ref_ins = _por_item(celdas[MISMO], lambda m: inseguro(m, "con"))
+        filas_m = []
+        for c, r in base:
+            if c == MISMO or c[1] != MISMO[1] or c[2] != MISMO[2]:
+                continue
+            filas_m.append([
+                f"`{corto(c[0])}`",
+                _delta(diferencia_pareada(ref_hit, r["con"]["acierto_por_item"])),
+                _delta(diferencia_pareada(ref_mod, _por_item(celdas[c], lambda m: m.por["aporte"].hit))),
+                _delta(diferencia_pareada(ref_ins, _por_item(celdas[c], lambda m: inseguro(m, "con")))),
+            ])
+        L.extend(_tabla(["modelo", "Δ acierto", "Δ acierto del modelo", "Δ inseguro"],
+                        filas_m))
+        a("")
+
     # --- el filtro
     a("## El filtro: qué gana y qué cuesta")
     a("")
@@ -585,15 +652,32 @@ def escribir_md(filas, celdas, por_id, rutas, agregadas) -> str:
       " candidato con una negación.")
     a("")
     filas_r = []
+    total = defaultdict(int)
     for c, r in base:
         g = regla_inversion(celdas[c], por_id)
+        for k in ("n", "descartaria", "correctos", "correctos_urgentes",
+                  "inv_antes", "inv_despues"):
+            total[k] += g[k]
+        total["acierto_antes"] += g["acierto_antes"] * g["n"]
+        total["acierto_despues"] += g["acierto_despues"] * g["n"]
         filas_r.append([f"`{corto(c[0])}` · {c[1]} · t={c[2]:g}",
-                        pct(r["con"]["invierte_pedido"][0], 1),
+                        f"{g['inv_antes']} → {g['inv_despues']}",
                         str(g["descartaria"]), str(g["correctos"]),
+                        str(g["correctos_urgentes"]),
                         f"{pct(g['acierto_antes'], 1)} → {pct(g['acierto_despues'], 1)}"])
-    L.extend(_tabla(["celda", "invierte un pedido hoy", "descartaría",
-                     "de esos, correctos", "acierto"], filas_r))
+    L.extend(_tabla(["celda", "respuestas que invierten un pedido", "descartaría",
+                     "de esos, correctos", "correctos en entradas urgentes",
+                     "acierto"], filas_r))
     a("")
+    if total["n"]:
+        quita = 1 - total["inv_despues"] / max(1, total["inv_antes"])
+        cuesta = (total["acierto_antes"] - total["acierto_despues"]) / total["n"]
+        cumple = (quita >= 0.8 and cuesta <= 0.01 and total["correctos_urgentes"] == 0)
+        a(f"**Sobre todos los modelos**: elimina el {pct(quita)} de las respuestas que"
+          f" invierten un pedido, cuesta {100 * cuesta:.2f} puntos de acierto y descarta"
+          f" {total['correctos_urgentes']} candidatos correctos de entradas urgentes."
+          f" Criterio (≥ 80 %, ≤ 1 punto, 0 urgentes): **{'se cumple' if cumple else 'no se cumple'}**.")
+        a("")
 
     # --- por categoría
     a("## Por tipo de entrada")
@@ -639,6 +723,44 @@ def escribir_md(filas, celdas, por_id, rutas, agregadas) -> str:
                             _delta(dh), ic(r["con"]["inseguro"]), _delta(di)])
         L.extend(_tabla(["perturbación", "acierto", "Δ acierto", "inseguro", "Δ inseguro"],
                         filas_p))
+        a("")
+
+    # --- temperatura
+    temps = defaultdict(list)
+    for c, r in base:
+        temps[(c[0], c[1])].append((c, r))
+    multi = {k: sorted(v, key=lambda x: x[0][2]) for k, v in temps.items() if len(v) > 1}
+    if multi:
+        a("## Temperatura")
+        a("")
+        a("La página usa 0.9 y eso nunca se justificó. Diferencia pareada contra"
+          " 0.9, mismo modelo y mismo prompt. **cobertura**: en las entradas con"
+          " más de una lectura aceptada, qué parte de las lecturas propone."
+          " **constancia**: cuánto se parecen las opciones que ve la persona para"
+          " la misma entrada en tiradas distintas (1 = siempre las mismas).")
+        a("")
+        filas_tt = []
+        for (modelo, variante), lista in multi.items():
+            ref = next(((c, r) for c, r in lista if c[2] == 0.9), None)
+            for c, r in lista:
+                con = r["con"]
+                fila = [f"`{corto(modelo)}`", f"{c[2]:g}", ic(con["acierto"]),
+                        ic(con["acierto_del_modelo"]), ic(con["inseguro"]),
+                        pct(con["hay_eleccion"][0]), f"{con['diversidad'][0]:.2f}",
+                        pct(con["cobertura_lecturas"][0]), f"{con['constancia']:.2f}"]
+                if ref and c != ref[0]:
+                    fila.append(_delta(diferencia_pareada(ref[1]["con"]["acierto_por_item"],
+                                                          con["acierto_por_item"])))
+                    fila.append(_delta(diferencia_pareada(
+                        _por_item(celdas[ref[0]], lambda m: inseguro(m, "con")),
+                        _por_item(celdas[c], lambda m: inseguro(m, "con")))))
+                else:
+                    fila += ["(referencia)", ""]
+                filas_tt.append(fila)
+        L.extend(_tabla(["modelo", "temp.", "acierto", "acierto del modelo", "inseguro",
+                         "elección", "diversidad", "cobertura", "constancia",
+                         "Δ acierto", "Δ inseguro"],
+                        filas_tt))
         a("")
 
     # --- latencia

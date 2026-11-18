@@ -54,4 +54,22 @@ export const PLANES = {
 PLANES.latencia = [Q25_15, Q3_17, Q3_4, PHI, Q3_06, Q25_05, Q25_3].map(
   (m) => celda(m, "v12-neutro", 0.9, 1, { paso: 2 }));
 
+/** Segunda fase, sobre los finalistas que dejó el cribado. Se eligen por
+ * variable de entorno para no tocar este archivo después de ver resultados:
+ *
+ *   FINALISTAS=Q3_17,Q25_15 node correr.mjs temperatura
+ *   FINALISTAS=Q3_17 node correr.mjs robustez
+ *
+ * - temperatura: 0.3 y 0.6 contra la 0.9 de la página, que nunca se justificó;
+ * - robustez: la entrada como llega de un tablero de mirada. Dos pasadas por
+ *   perturbación, contra las del cribado con la entrada limpia. */
+const FINALISTAS = (process.env.FINALISTAS ?? "").split(",").filter(Boolean)
+  .map((k) => ({ Q25_05, Q25_15, Q25_3, Q3_06, Q3_17, Q3_4, PHI })[k])
+  .filter(Boolean);
+PLANES.temperatura = FINALISTAS.flatMap((m) => [0.3, 0.6].map(
+  (t) => celda(m, "v12-neutro", t, 3)));
+PLANES.robustez = FINALISTAS.map((m) => celda(m, "v12-neutro", 0.9, 2, {
+  perturbaciones: ["minusculas", "sin_acentos", "espacios", "palabra_doble",
+                   "letra_vecina"] }));
+
 export const MODELOS = { Q25_05, Q25_15, Q25_3, Q3_06, Q3_17, Q3_4, PHI };

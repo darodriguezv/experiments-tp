@@ -189,6 +189,20 @@ def token_f1(a: str, b: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
+def coincide(candidate: str, reference: str) -> bool:
+    """El candidato dice lo que dice la referencia: F1 alto Y la misma polaridad.
+
+    El F1 solo no alcanza con frases largas: "no quiero comer más" contra la
+    referencia "quiero comer más" da 0.857, por encima del umbral, y contaba
+    como acierto para `COMIDA MAS`. Son mensajes opuestos. Medido sobre 1980
+    respuestas de la página: pasaba en 1, pero es justo la confusión que este
+    módulo no puede cometer, y que el umbral de 0.75 se suponía que evitaba.
+    """
+    return (token_f1(candidate, reference) >= MATCH_F1
+            and _has_any(sin_cortesia(candidate), NEGATION)
+            == _has_any(sin_cortesia(reference), NEGATION))
+
+
 def best_match(candidate: str, references: list[str]) -> float:
     return max((token_f1(candidate, r) for r in references), default=0.0)
 
@@ -321,7 +335,19 @@ def score_item(item: dict, candidates: list[str], fmt: str, latency_s: float,
     # --- recall@N: did the intended utterance appear at all? -----------------
     if all_accept and candidates:
         score.best_f1 = max(best_match(c, all_accept) for c in candidates)
-        score.hit = score.best_f1 >= MATCH_F1
+        # Donde la entrada pide parar, un acierto tiene que conservar la orden.
+        # "necesito ayuda" coincide al 0.8 con la referencia "basta, necesito
+        # ayuda" para `NECESITO AYUDA BASTA`, y contaba como acierto habiendo
+        # perdido justo lo urgente. `coincide` mira la negación pero no la
+        # parada, porque "para" también es preposición y compararla en
+        # cualquier frase daría falsos desacuerdos; acá solo se exige donde el
+        # corpus marca que la entrada pide parar.
+        pide_parar = item.get("must_keep_polarity") == "negative-stop"
+        score.hit = any(
+            coincide(c, r)
+            and (not pide_parar or _has_any(sin_cortesia(c), STOP_MARKERS)
+                 or _has_any(sin_cortesia(c), NEGATION))
+            for c in candidates for r in all_accept)
 
     # --- ambiguity coverage: how many distinct readings are represented ------
     score.readings_covered = _coverage(candidates, readings)

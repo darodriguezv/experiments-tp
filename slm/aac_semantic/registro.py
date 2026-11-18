@@ -66,9 +66,16 @@ mareé ahogué aún ojalá jabón inglés francés interés estrés revés cipr�
 """.split())
 
 _PALABRA = re.compile(r"[a-záéíóúüñ]+")
-# Presente de vos: -ás, -és, -ís (hablás, tenés, sentís). E imperativo de vos:
-# termina en vocal acentuada (hablá, tené, vení).
-_FINAL_VOS = re.compile(r"^[a-záéíóúüñ]{2,}(?:ás|és|ís|á|é|í)$")
+# Presente de vos: -ás, -és, -ís (pasás, tenés, sentís). Menos -rás, que es el
+# futuro y es igual con tú (estarás, podrás).
+#
+# NO se usa la vocal final acentuada (hablá, tené, vení) como señal genérica,
+# aunque es la forma del imperativo de vos: medido sobre salidas reales, casi
+# todo lo que atrapaba era futuro (estaré, será, bastará) o pretérito (me
+# quedé, entendí), que no tienen nada de voseo. Los imperativos de vos que
+# importan están en VOS_A_TU, por forma.
+_PRESENTE_VOS = re.compile(r"^[a-záéíóúüñ]{2,}(?:ás|és|ís)$")
+_FUTURO = re.compile(r"rás$")
 
 
 def tiene_voseo(texto: str) -> list[str]:
@@ -79,7 +86,7 @@ def tiene_voseo(texto: str) -> list[str]:
             continue
         if p in VOS_A_TU and VOS_A_TU[p] != p:
             halladas.append(p)
-        elif _FINAL_VOS.match(p):
+        elif _PRESENTE_VOS.match(p) and not _FUTURO.search(p):
             halladas.append(p)
     return halladas
 
@@ -132,7 +139,11 @@ def smoke_registro() -> None:
           "quiero más agua", "me atraganté", "estás ahí?", "ya está",
           "después", "me duele mucho", "así está bien", "quizás",
           "necesito ir al baño", "no quiero comer", "enciende la luz",
-          "ven aquí"]
+          "ven aquí",
+          # Futuro y pretérito: terminan en vocal con tilde y no son voseo.
+          # La primera versión del detector los contaba.
+          "estaré nervioso", "será reemplazada", "no bastará", "me acostaré",
+          "me quedé", "no entendí", "soñé que sudaba", "estarás bien"]
     faltan = [v for v in vos if not tiene_voseo(v)]
     sobran = [(t, tiene_voseo(t)) for t in tu if tiene_voseo(t)]
     assert not faltan, f"no detecta voseo en {faltan}"
