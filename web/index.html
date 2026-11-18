@@ -19,8 +19,9 @@
   <div class="caja">
     <h1>Tablero de comunicación por mirada</h1>
     <p class="guia-texto">
-      Seleccione qué desea hacer. Todas las opciones requieren calibrar la
-      mirada al comenzar.
+      Seleccione qué desea hacer. Las opciones por mirada requieren calibrar
+      al comenzar, siempre. El tablero sin cámara se usa con el mouse, el dedo
+      o el teclado.
     </p>
 
     <div class="opciones" id="opciones"></div>
@@ -33,6 +34,16 @@
         en un punto de la pantalla. Cambiarlo reinicia la página y obliga a
         calibrar de nuevo.</p>
       <div class="estimadores" id="estimadores"></div>
+    </div>
+
+    <!-- El modelo de lenguaje. Hasta ahora la página nunca lo cargaba: todo lo
+         que proponía salía de 132 respuestas grabadas, y cualquier otra frase
+         quedaba solo con el literal. -->
+    <div class="bloque-est" id="bloque-modelo">
+      <h3 class="sub">Expansión de frases</h3>
+      <p class="chico tenue" id="modelo-estado">Comprobando el navegador…</p>
+      <div class="barra" id="modelo-barra-caja" hidden><div id="modelo-barra"></div></div>
+      <button id="btn-modelo" class="suave" type="button" hidden>Cargar el modelo</button>
     </div>
 
     <div class="privacidad">
@@ -129,11 +140,14 @@
   </div>
   <div id="escena" class="escena"></div>
   <div class="medidor">
-    <span>permanencias <b id="dwells">0</b></span>
-    <span><b id="fps">0 fps</b></span>
-    <span id="ajuste"></span>
-    <span id="diag" class="dato"></span>
-    <span class="tenue">1.2 s por selección</span>
+    <span class="solo-mirada">permanencias <b id="dwells">0</b></span>
+    <span class="solo-mirada"><b id="fps">0 fps</b></span>
+    <span id="ajuste" class="solo-mirada"></span>
+    <span id="diag" class="dato solo-mirada"></span>
+    <span class="tenue solo-mirada">1.2 s por selección</span>
+    <span class="tenue solo-puntero">Sin cámara: clic, toque o Tab y Enter</span>
+    <span class="dato solo-puntero" id="modelo-sello"></span>
+    <button id="btn-salir-tablero" class="suave solo-puntero" type="button">Volver al menú</button>
   </div>
   <div id="cursor" class="cursor" hidden></div>
   <div id="zoom-ind" class="zoom-ind" hidden></div>

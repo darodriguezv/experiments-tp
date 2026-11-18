@@ -447,3 +447,32 @@ h3.sub {
 @media (prefers-reduced-motion: reduce) {
   .grilla { transition: none }
 }
+
+/* ------------------------------------------------------ sin cámara
+   El mismo tablero, elegido con el mouse, el dedo o el teclado. El aviso de
+   que una celda se puede tocar es el mismo "viva" de la mirada: se cambia de
+   medio, no de idioma visual. */
+.solo-puntero { display: none; }
+body.sin-camara .solo-puntero { display: inline-flex; align-items: center; }
+body.sin-camara .solo-mirada { display: none; }
+body.sin-camara #cursor, body.sin-camara #zoom-ind { display: none; }
+body.sin-camara .medidor { align-items: center; }
+body.sin-camara .medidor button.suave { padding: 4px 12px; font-size: .78rem; }
+
+body.sin-camara .celda { cursor: pointer; }
+body.sin-camara .celda:hover {
+  background: var(--celda-viva); border-color: var(--borde-vivo);
+}
+body.sin-camara .celda:focus-visible {
+  outline: 2px solid var(--activo); outline-offset: -2px;
+}
+/* Al elegir: el relleno se enciende un instante, como al completar una
+   permanencia. */
+body.sin-camara .celda.tocada .relleno { opacity: .28; transition: none; }
+body.sin-camara .celda .relleno { transition: opacity .18s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  body.sin-camara .celda .relleno { transition: none; }
+}
+
+#bloque-modelo .barra { margin: 8px 0 10px; }
+#bloque-modelo button.suave { margin-top: 4px; }

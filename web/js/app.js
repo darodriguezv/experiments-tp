@@ -76,6 +76,22 @@ const MODOS = {
     cfg: { expandir: true, contexto: false, pagina_inicial: "core" },
     conjunto: null,
   },
+  /* Sin cámara: el mismo tablero -las dos páginas, la expansión, la voz- con
+   * el mouse, el dedo o el teclado. Para que alguien pueda probar el tablero
+   * sin pasar por la colocación y la calibración, por ejemplo un asesor que
+   * lo quiere ver funcionar en su computadora.
+   *
+   * No contradice la regla de calibrar siempre: esa regla es para la mirada,
+   * y este modo no usa la mirada para nada. Las condiciones del estudio y el
+   * tablero por mirada siguen calibrando en cada sesión, sin excepción. */
+  sin_camara: {
+    nombre: "Tablero sin cámara",
+    detalle: "Las dos páginas, palabras y letras, con el mouse, el dedo o el "
+           + "teclado. Sin cámara ni calibración: para probar el tablero y "
+           + "la expansión de frases.",
+    cfg: { expandir: true, contexto: false, pagina_inicial: "core" },
+    conjunto: null,
+  },
   letra: { conjunto: 0 },
   sin_contexto: { conjunto: 1 },
   con_contexto: { conjunto: 2 },
@@ -111,6 +127,7 @@ function estimadorElegido() {
 const est = {
   fase: "menu",
   modo: "libre", cola: [], protocolo: null,
+  sinCamara: false,             // tablero con mouse, dedo o teclado
   guion: null, tarea: 0,
   mirada: null,                 // el estimador en uso
   estimador: estimadorElegido(),
@@ -174,6 +191,11 @@ async function iniciar() {
     : "Este navegador no tiene WebGPU: las frases van a venir de una corrida grabada.";
 
   pintarEstimadores();
+  pintarModelo();
+  $("#btn-modelo")?.addEventListener("click", cargarModelo);
+  $("#btn-salir-tablero")?.addEventListener("click", salirSinCamara);
+  $("#escena").addEventListener("click", elegirConPuntero);
+  $("#escena").addEventListener("keydown", elegirConPuntero);
 
   $("#btn-empezar").addEventListener("click", arrancarCamara);
   $("#btn-reintentar").addEventListener("click", () => {
@@ -206,7 +228,8 @@ function cond(clave) {
 function pintarMenu() {
   const cont = $("#opciones");
   if (!cont) return;
-  const items = [["libre", MODOS.libre.nombre, MODOS.libre.detalle]];
+  const items = [["libre", MODOS.libre.nombre, MODOS.libre.detalle],
+                 ["sin_camara", MODOS.sin_camara.nombre, MODOS.sin_camara.detalle]];
   for (const clave of ["letra", "sin_contexto", "con_contexto"]) {
     const c = cond(clave);
     if (c) items.push([clave, c.nombre, c.instrucciones]);
@@ -218,8 +241,8 @@ function pintarMenu() {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "opcion-modo";
-    b.innerHTML = `<span class="n">${clave === "libre" ? "·"
-      : clave === "completo" ? "∗" : i}</span>`;
+    b.innerHTML = `<span class="n">${clave === "libre" || clave === "sin_camara" ? "·"
+      : clave === "completo" ? "∗" : i - 1}</span>`;
     const c = document.createElement("span");
     c.className = "cuerpo";
     c.innerHTML = `<span class="titulo"></span><span class="detalle"></span>`;
@@ -262,9 +285,108 @@ function pintarEstimadores() {
 }
 
 function elegirModo(clave) {
+  if (clave === "sin_camara") return entrarSinCamara();
   est.modo = clave;
   est.cola = clave === "completo" ? MODOS.completo.secuencia.slice() : [clave];
   prepararSiguiente();
+}
+
+/* ------------------------------------------------------ sin cámara */
+
+/** Entra directo al tablero, sin cámara: se elige con clic, toque o teclado. */
+function entrarSinCamara() {
+  est.sinCamara = true;
+  est.modo = "sin_camara";
+  est.cola = [];
+  est.cfgActual = MODOS.sin_camara.cfg;
+  est.guion = null;
+  est.tarea = 0;
+  est.pagina = MODOS.sin_camara.cfg.pagina_inicial;
+  est.palabras = []; est.letras = ""; est.candidatos = null;
+  est.stats = { dwells: 0, t0: null };
+  est.zoom.alejar();
+  document.body.classList.add("sin-camara");
+  $("#cursor").hidden = true;
+  $("#zoom-ind").hidden = true;
+  mostrar("tablero");
+  redibujar();
+}
+
+function salirSinCamara() {
+  est.sinCamara = false;
+  est.candidatos = null;
+  document.body.classList.remove("sin-camara");
+  pintarModelo();
+  mostrar("menu");
+}
+
+/** Un clic, un toque o Enter sobre una celda la elige, como una permanencia.
+ *  Solo en el modo sin cámara: en los otros, la que elige es la mirada, y un
+ *  clic de más contaminaría lo que mide el estudio. */
+function elegirConPuntero(ev) {
+  if (!est.sinCamara || est.fase !== "tablero") return;
+  if (ev.type === "keydown" && ev.key !== "Enter" && ev.key !== " ") return;
+  const el = ev.target.closest?.("[data-accion]");
+  if (!el || est.candidatos?.pensando) return;
+  ev.preventDefault();
+  el.classList.add("tocada");
+  setTimeout(() => el.classList.remove("tocada"), 180);
+  aplicar(el.dataset.accion);
+}
+
+/* ------------------------------------------------- el modelo de lenguaje */
+
+/** El estado del modelo, en el menú. Si ya está guardado en este navegador se
+ *  carga solo; si hay que bajarlo, se pregunta, porque son gigas. */
+async function pintarModelo() {
+  const s = est.slm;
+  const estado = $("#modelo-estado"), boton = $("#btn-modelo");
+  const caja = $("#modelo-barra-caja");
+  if (!estado || !s) return;
+  boton.hidden = true;
+  caja.hidden = !s.cargando;
+  if (s.motor) {
+    estado.textContent = `Modelo cargado (${s.modelo.replace(/-q4f16_1-MLC$/, "")}). `
+      + "Las frases se expanden en este equipo, sin conexión.";
+    return;
+  }
+  if (s.cargando) return;
+  if (!s.soportado) {
+    estado.textContent = "Este navegador no tiene WebGPU, así que no puede correr "
+      + "el modelo. Se usan respuestas grabadas, que solo cubren las frases del "
+      + "corpus; para el resto se ofrece la frase tal como se escribió. "
+      + "Chrome o Edge actualizados sí lo tienen.";
+    return;
+  }
+  if (await s.enCache()) return cargarModelo();
+  const gb = s.descargaGB;
+  estado.textContent = "Sin el modelo, las frases salen de respuestas grabadas"
+    + " y solo cubren las del corpus. Cargarlo baja"
+    + (gb ? ` ${gb.toLocaleString("es")} GB` : " el modelo")
+    + " una sola vez; después queda guardado en este navegador.";
+  boton.hidden = false;
+}
+
+async function cargarModelo() {
+  const s = est.slm;
+  const estado = $("#modelo-estado"), barra = $("#modelo-barra");
+  $("#btn-modelo").hidden = true;
+  $("#modelo-barra-caja").hidden = false;
+  estado.textContent = "Cargando el modelo…";
+  const ok = await s.cargar((texto, p) => {
+    barra.style.width = `${Math.round(100 * p)}%`;
+    estado.textContent = /cache/i.test(texto) && !/fetch/i.test(texto)
+      ? "Cargando el modelo desde este navegador…"
+      : `Bajando el modelo: ${Math.round(100 * p)} %`;
+  });
+  $("#modelo-barra-caja").hidden = true;
+  if (!ok) {
+    estado.textContent = `No se pudo cargar el modelo: ${s.error}. `
+      + "Se siguen usando las respuestas grabadas.";
+    $("#btn-modelo").hidden = false;
+    return;
+  }
+  pintarModelo();
 }
 
 /** Deja listo el próximo bloque de la cola y muestra la antesala. */
@@ -852,6 +974,18 @@ function redibujar() {
   est.marcoBase = g ? g.getBoundingClientRect() : null;
   aplicarZoom();
   pintarMensaje();
+  if (est.sinCamara) {
+    // Que se pueda llegar a cada celda con Tab y elegirla con Enter.
+    cont.querySelectorAll("[data-accion]").forEach((el) => {
+      el.tabIndex = 0;
+      el.setAttribute("role", "button");
+    });
+    const sello = $("#modelo-sello");
+    if (sello) {
+      sello.textContent = est.slm?.motor ? "expansión: modelo local"
+        : "expansión: respuestas grabadas";
+    }
+  }
 }
 
 function texto() {
@@ -862,7 +996,9 @@ function texto() {
 function pintarMensaje() {
   const t = texto();
   const el = $("#mensaje");
-  el.textContent = t || "Mire una celda y sostenga la mirada";
+  el.textContent = t || (est.sinCamara
+    ? "Elija una celda con un clic o un toque"
+    : "Mire una celda y sostenga la mirada");
   el.classList.toggle("vacio", !t);
   // La consigna tiene que estar a la vista todo el tiempo: si hay que
   // acordarse de memoria, el estudio mide memoria.
@@ -875,6 +1011,9 @@ function pintarMensaje() {
 }
 
 function pasoTablero(datos, dt, t) {
+  // Sin cámara elige el puntero (ver elegirConPuntero). Si la cámara quedó
+  // andando de una sesión anterior, la mirada no puede elegir además.
+  if (est.sinCamara) return;
   const cursor = $("#cursor");
   let muestra = { x: 0, y: 0, ok: false };
 

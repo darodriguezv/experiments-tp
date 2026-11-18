@@ -40,6 +40,14 @@ export const MODELO_WEB = "Qwen2.5-1.5B-Instruct-q4f16_1-MLC";
  * 62% de recall contra 77% del 7b, así que esta página muestra una versión
  * MÁS DÉBIL que la medida. Se dice en pantalla, no se disimula. */
 
+const DESCARGA_GB = {
+  "Qwen2.5-0.5B-Instruct-q4f16_1-MLC": 0.28,
+  "Qwen2.5-1.5B-Instruct-q4f16_1-MLC": 0.87,
+  "Qwen3-0.6B-q4f16_1-MLC": 0.34,
+  "Qwen3-1.7B-q4f16_1-MLC": 0.97,
+  "Qwen3-4B-q4f16_1-MLC": 2.26,
+};
+
 export class SLM {
   /**
    * @param {object} grabados  salidas reales guardadas, para el modo grabado
@@ -71,6 +79,22 @@ export class SLM {
     if (this.motor) return "vivo";
     if (this.cargando) return "cargando";
     return "grabado";
+  }
+
+  /** Cuánto pesa bajar el modelo, en GB, para decírselo a la persona antes.
+   *  Suma de los pesos publicados en huggingface.co/mlc-ai. */
+  get descargaGB() { return DESCARGA_GB[this.modelo] ?? null; }
+
+  /** ¿El modelo ya está guardado en este navegador? Si lo está, cargarlo no
+   *  baja nada y se puede hacer sin preguntar. */
+  async enCache() {
+    if (!this.soportado) return false;
+    try {
+      const webllm = await import(WEBLLM);
+      return await webllm.hasModelInCache(this.modelo);
+    } catch (_) {
+      return false;
+    }
   }
 
   /** Baja y arranca el modelo. Devuelve true si quedó listo. */
